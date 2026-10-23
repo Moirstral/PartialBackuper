@@ -1,6 +1,12 @@
-json5
-os
-shutil
-zipfile
-tempfile
-time
+# 本项目仅需 Python 标准库，无第三方依赖。
+#
+# script.py / backup_runner.py / map_selector/（server.py、renderer.py）
+# 全部基于 Python 自带的标准库：json、os、shutil、zipfile、tempfile、time、
+# argparse、re、sys、struct、gzip、zlib、hashlib、socket、threading、
+# concurrent.futures、webbrowser、pathlib、http.server、urllib 等。
+#
+# 因此无需执行 `pip install -r requirements.txt`；本文件仅用于说明依赖情况。
+# 保留它也不会报错：以下均为注释，pip 会跳过。
+#
+# 需要 Python 3（http.server 的 ThreadingHTTPServer 等自 3.7 起可用；
+# 开发与测试环境为 Python 3.15）。
