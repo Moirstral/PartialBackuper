@@ -6,7 +6,7 @@ This repository is a fork of:
     Yinhe2332767/PartialBackuper
     https://github.com/Yinhe2332767/PartialBackuper
 
-Original author: Yinhe233 (author note in README.txt: "作者：Yinhe233，主要代码由 AI 生成").
+Original author: Yinhe233 (per the upstream project: "作者：Yinhe233，主要代码由 AI 生成").
 
 
 About the license
@@ -37,7 +37,7 @@ Two explicit reservations, per the contributor's wishes:
 
 The inherited files (script.py, backup_runner.py, global_config.json,
 requirements.txt, run_script.bat, configs/config_template.json,
-configs/README_config.txt, README.txt) remain the copyright of their original
+configs/README_config.txt) remain the copyright of their original
 author. No license grant is implied for them by this fork beyond the upstream
 author's own terms once they are stated.
 

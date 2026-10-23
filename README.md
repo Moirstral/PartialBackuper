@@ -97,7 +97,7 @@ python server.py            # 可选：--world "路径" --port 8787 --no-browser
 - **上游 [`Yinhe2332767/PartialBackuper`](https://github.com/Yinhe2332767/PartialBackuper) 目前没有许可证**（法律上默认“保留所有权利”）。因此：
   1. 若原作者提出要求，本仓库将下线（设为私有或删除）。
   2. 若上游日后为其代码补充许可证，本 fork 将针对继承而来的代码相应调整本仓库的许可条款。
-- `script.py`、`backup_runner.py`、`global_config.json`、`requirements.txt`、`run_script.bat`、`configs/` 模板与说明、`README.txt` 等继承文件的著作权归原作者。
+- `script.py`、`backup_runner.py`、`global_config.json`、`requirements.txt`、`run_script.bat`、`configs/` 模板与说明等继承文件的著作权归原作者。
 
 ## 致谢
 
