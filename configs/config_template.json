@@ -1,0 +1,48 @@
+{
+  "save_path": "C:/users/name/AppData/Roaming/.minecraft/saves/新的世界",
+  "ignores": [
+    "example_folder1",
+    "example_folder2",
+    "example_folder3/example_file",
+    {
+      "folder": "example_folder4",
+      "files": [
+        "file1.xxx",
+        "file2.yyy"
+      ]
+    }
+  ],
+  "partials": [
+    {
+      "folder": "any_region_folder_can_label_coordinate_ranges",
+      "x1": -114,
+      "z1": -514,
+      "x2": 1919,
+      "z2": 810
+    },
+    { //Now with comments, too. Each [x1[i], x2[i], z1[i], z2[i]] forms a range. 
+      "folder": ["any_region_folder_can_label_coordinate_ranges","if_multiple_folders_share_the_same_partial_saving","can_write_together_likle_this","will_auto_compile_with_multiple_coords_too"],
+      "x1": [-1, 1200, 33550336],
+      "z1": [-22, 1732, 33550336],
+      "x2": [256, 800, 33550336],
+      "z2": [-511, 2200, 33550336]
+    },
+    "any_non_region_folder/I_want_this.file",
+    {
+      "folder": "any_non_region_folder",
+      "files": [
+        "file1.txt",
+        "file2.jar",
+        "file3.ooiiai"
+      ]
+    },
+    {
+      "folder": ["any_non_region_folder","can_do_multiple_folders_as_well","will_copy_files_of_the_same_name_under_each_folder"],
+      "files": [
+        "file1.txt",
+        "file2.jar",
+        "file3.ooiiai"
+      ]
+    }
+  ]
+}

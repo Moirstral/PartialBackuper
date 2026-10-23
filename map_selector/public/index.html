@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>MC存档选区备份工具</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <header class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+          <path d="M12 2.8 20 7v10l-8 4.2L4 17V7l8-4.2Z" />
+          <path d="M4 7l8 4.2L20 7M12 11.2V21" />
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1>MC存档选区备份工具</h1>
+        <p>可视化框选区块 · 生成备份配置</p>
+      </div>
+    </header>
+
+    <section class="panel world-panel">
+      <div class="world-main">
+        <div class="world-icon">
+          <span class="icon-fallback" id="worldIconFallback">MC</span>
+          <img id="worldIconImg" alt="" hidden />
+        </div>
+        <div class="world-info">
+          <div class="world-name" id="worldName">尚未加载存档</div>
+          <div class="world-sub" id="worldSub">选择一个存档开始</div>
+          <div class="world-path" id="worldPath">—</div>
+          <div class="world-meta" id="worldMeta" hidden></div>
+        </div>
+      </div>
+      <div class="world-buttons">
+        <button class="btn ghost sm" id="btnSwitchWorld" type="button">切换存档</button>
+        <button class="btn ghost sm" id="btnRefresh" type="button" title="重新扫描区域文件">刷新扫描</button>
+      </div>
+      <div class="world-stats" id="worldStats" hidden>
+        <div><strong id="statDims">0</strong><span>维度</span></div>
+        <div><strong id="statRegions">0</strong><span>区域</span></div>
+        <div><strong id="statSize">0 MB</strong><span>区域数据</span></div>
+      </div>
+    </section>
+
+    <section class="panel dim-panel">
+      <div class="panel-head">
+        <h2>维度</h2>
+        <span class="panel-hint">点击切换</span>
+      </div>
+      <div class="dim-list" id="dimList"></div>
+      <p class="panel-empty" id="dimEmpty">加载存档后显示维度</p>
+    </section>
+
+    <section class="panel sel-panel">
+      <div class="panel-head">
+        <h2>选区 <span class="count-badge" id="selCount">0</span></h2>
+        <span class="panel-hint" id="regionsSum"></span>
+      </div>
+      <div class="sel-list" id="selList"></div>
+      <p class="panel-empty" id="selEmpty">在右侧地图上按住左键拖拽，即可框选要备份的区块；继续拖拽会追加到当前选区。</p>
+    </section>
+
+    <section class="panel export-panel">
+      <div class="panel-head">
+        <h2>配置文件</h2>
+        <span class="panel-hint">全部维度</span>
+      </div>
+      <div class="config-strip">
+        <div class="config-meta">
+          <span class="config-caption">当前配置</span>
+          <span class="config-name" id="configName">未关联</span>
+        </div>
+        <div class="config-buttons">
+          <button class="btn ghost xs" id="btnConfig" type="button">加载 / 保存</button>
+          <button class="btn ghost xs" id="btnPreview" type="button" title="预览完整配置 JSON">预览</button>
+        </div>
+      </div>
+      <div class="export-stats" id="exportStats"></div>
+      <div class="ignore-block" id="ignoreBlock">
+        <div class="ignore-head">
+          <span class="ignore-title">排除项</span>
+          <span class="ignore-hint">备份时忽略的存档内路径</span>
+        </div>
+        <div class="ignore-list" id="ignoreList"></div>
+        <form class="ignore-add" id="ignoreForm">
+          <input id="ignoreInput" class="ignore-input" type="text" maxlength="120" autocomplete="off"
+            spellcheck="false" placeholder="搜索目录名，或输入路径后点「添加」" aria-label="添加排除项" />
+          <button class="btn ghost xs" id="btnIgnoreAdd" type="submit">添加</button>
+          <button class="btn ghost xs" id="btnIgnoreBrowse" type="button" disabled
+            title="以树状结构浏览存档目录：点箭头展开/折叠，点行加入或移出排除项">浏览目录</button>
+        </form>
+        <div class="ignore-pick" id="ignorePick" hidden>
+          <div class="ignore-pick-head">
+            <span id="ignorePickNote">正在读取存档目录…</span>
+            <button type="button" class="ignore-pick-close" id="btnIgnorePickClose" title="关闭"
+              aria-label="关闭目录列表">×</button>
+          </div>
+          <div class="ignore-pick-list" id="ignorePickList"></div>
+        </div>
+      </div>
+      <div class="backup-row">
+        <button class="btn primary backup-btn" id="btnBackup" type="button" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3v12M7 10l5 5 5-5" />
+            <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+          </svg>
+          <span id="btnBackupText">开始备份</span>
+        </button>
+      </div>
+    </section>
+  </aside>
+
+  <main class="main">
+    <div class="stage" id="stage">
+      <canvas id="map" class="select-mode" aria-label="Minecraft 世界地图"></canvas>
+
+      <div class="toolbar toolbar-left">
+        <div class="segmented" role="group" aria-label="鼠标模式">
+          <button id="modeSelect" class="seg-btn active" type="button" title="框选模式 (V)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+              <rect x="3.5" y="3.5" width="17" height="17" rx="2" stroke-dasharray="4 3" />
+              <path d="M12 8.5v7M8.5 12h7" />
+            </svg>
+            <span>框选</span>
+          </button>
+          <button id="modePan" class="seg-btn" type="button" title="平移模式 (H)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3v18M3 12h18" />
+              <path d="m9 6 3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3" />
+            </svg>
+            <span>平移</span>
+          </button>
+        </div>
+        <label class="switch" title="放大后对齐 16×16 区块，缩小时对齐 512×512 区域">
+          <input type="checkbox" id="snapToggle" checked />
+          <span class="switch-track"></span>
+          <span id="snapLabel">对齐区域</span>
+        </label>
+        <button class="tool-btn new-sel-btn" id="btnNewSelection" type="button" title="新建选区 (N)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <rect x="3.5" y="3.5" width="17" height="17" rx="2" />
+            <path d="M12 8v8M8 12h8" />
+          </svg>
+          <span>新建选区</span>
+        </button>
+        <button class="tool-btn" id="btnActivity" type="button" title="检测玩家活动过的区块，生成特殊选区">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 12h3.5l2.5-6 5 12 2.5-6H21" />
+          </svg>
+          <span>活跃区块</span>
+        </button>
+        <label class="switch" id="waypointSwitch" hidden>
+          <input type="checkbox" id="waypointToggle" checked />
+          <span class="switch-track"></span>
+          <span id="waypointToggleText">路径点</span>
+        </label>
+      </div>
+
+      <div class="toolbar toolbar-right">
+        <button class="tool-btn" id="btnFit" type="button" title="适配视图 (F)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3" />
+          </svg>
+          <span>适配</span>
+        </button>
+        <div class="zoom-group">
+          <button class="tool-btn icon" id="btnZoomOut" type="button" title="缩小">−</button>
+          <span class="zoom-label" id="zoomLabel">100%</span>
+          <button class="tool-btn icon" id="btnZoomIn" type="button" title="放大">+</button>
+        </div>
+      </div>
+
+      <div class="map-hud" id="mapHud">
+        <span class="hud-dim" id="hudDim">—</span>
+        <span class="hud-sep"></span>
+        <span class="hud-coord" id="hudCoord">X — · Z —</span>
+        <span class="hud-region" id="hudRegion">r.—.—</span>
+      </div>
+
+      <div class="map-help">
+        <div><strong>左键拖拽</strong> 新建/追加选区 · <strong>中键 / 空格</strong> 平移 · <strong>滚轮</strong> 缩放</div>
+        <div class="muted">放大到 <strong>80%</strong> 以上按 <strong>16×16 区块</strong> 框选，缩小时按 <strong>512×512 区域</strong> 框选</div>
+        <div class="muted"><strong>右键</strong> 删除区块（活动选区中为标记可抛弃）· <strong>Alt + 右键</strong> 编辑/删除选区 · <strong>Ctrl + 拖拽</strong> 追加到指定选区 · <strong>Esc</strong> 结束当前选区</div>
+      </div>
+
+      <div class="render-badge" id="renderBadge" hidden>
+        <span class="spinner"></span>
+        <span id="renderText">正在渲染…</span>
+      </div>
+
+      <div class="active-badge" id="activeBadge" hidden>
+        <span class="active-dot"></span>
+        <span id="activeBadgeLead">正在添加到</span>
+        <strong id="activeBadgeName">选区</strong>
+        <span class="active-hint" id="activeBadgeHint">继续拖拽追加</span>
+        <button type="button" id="btnActiveNew">新建</button>
+        <button type="button" id="btnActiveDone">完成</button>
+      </div>
+
+      <div class="drag-tip" id="dragTip" hidden></div>
+      <div class="drag-tip activity-tip" id="activityTip" hidden></div>
+
+      <div class="stage-empty" id="stageEmpty">
+        <div class="empty-grid" aria-hidden="true"></div>
+        <h2>加载备份配置，开始选区</h2>
+        <p>选择配置后会按其中的 save_path 打开存档。还没有配置时，也可以先直接打开存档框选，再另存为新配置。</p>
+        <div class="empty-actions">
+          <button class="btn primary" id="btnOpenConfig" type="button">选择备份配置</button>
+          <button class="btn ghost" id="btnOpenWorld" type="button">直接打开存档</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<dialog id="worldDialog" class="world-dialog">
+  <form id="worldForm" novalidate>
+    <div class="dialog-head">
+      <div class="dialog-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round">
+          <path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Z" />
+          <path d="M9 3v15M15 6v15" />
+        </svg>
+      </div>
+      <div>
+        <h2>打开存档</h2>
+        <p>填写包含 <code>level.dat</code> 的存档文件夹完整路径</p>
+      </div>
+    </div>
+    <label class="input-label" for="worldPathInput">存档路径</label>
+    <input id="worldPathInput" class="path-input" type="text" autocomplete="off" spellcheck="false"
+      placeholder="E:/Minecraft/.Axolotl/profiles/养老生存/saves/一辈子的生存档" />
+    <p class="dialog-error" id="dialogError" hidden></p>
+    <p class="dialog-tip">路径中可以包含中文，正斜杠或反斜杠均可。</p>
+    <div class="dialog-actions">
+      <button type="button" class="btn ghost" id="btnDialogCancel">取消</button>
+      <button type="submit" class="btn primary" id="btnDialogOpen">打开地图</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="configDialog" class="world-dialog config-dialog">
+  <form id="configForm" novalidate>
+    <div class="dialog-head">
+      <div class="dialog-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+          <path d="M14 2v6h6M8 13h8M8 17h5" />
+        </svg>
+      </div>
+      <div>
+        <h2>备份配置</h2>
+        <p>加载 configs 目录中的配置，或把全部维度的选区保存成配置</p>
+      </div>
+    </div>
+    <label class="input-label" for="configSelect">已有配置</label>
+    <select id="configSelect" class="path-input config-select" aria-label="已有配置"></select>
+    <p class="dialog-tip" id="configHint">选择已有配置可加载到地图，也可以覆盖保存。</p>
+    <div class="config-save-field">
+      <label class="input-label" for="configNewName">另存为（可选）</label>
+      <input id="configNewName" class="path-input" type="text" autocomplete="off" spellcheck="false"
+        placeholder="例如 新的生存档.json" />
+    </div>
+    <p class="dialog-error" id="configError" hidden></p>
+    <div class="dialog-actions config-actions">
+      <button type="button" class="btn ghost" id="btnConfigCancel">取消</button>
+      <button type="button" class="btn ghost" id="btnConfigLoad">加载所选</button>
+      <button type="submit" class="btn primary" id="btnConfigSave">保存配置</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="backupDialog" class="world-dialog backup-dialog">
+  <div class="dialog-card">
+    <div class="dialog-head">
+      <div class="dialog-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3v12M7 10l5 5 5-5" />
+          <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+        </svg>
+      </div>
+      <div>
+        <h2 id="backupTitle">开始备份</h2>
+        <p id="backupSub">确认要备份的内容</p>
+      </div>
+    </div>
+    <div class="backup-summary" id="backupSummary"></div>
+    <div class="backup-note" id="backupNoteWrap">
+      <label class="input-label" for="backupNote">备份备注（可选）</label>
+      <input id="backupNote" class="path-input name-input" type="text" maxlength="40" autocomplete="off" spellcheck="false" placeholder="例如：打完龙 / 建完刷怪塔" />
+      <p class="dialog-tip">会加在 zip 文件名日期前面；留空则沿用原文件名，非法字符会替换为 _。</p>
+    </div>
+    <label class="backup-option" id="backupOption" for="chunkOnlyToggle">
+      <input type="checkbox" id="chunkOnlyToggle" />
+      <span class="backup-option-body">
+        <strong>仅保存选中的区块</strong>
+        <span class="backup-option-hint" id="chunkOnlyHint">默认关闭：保留选区涉及的完整区域文件，最安全。</span>
+      </span>
+    </label>
+    <div class="backup-save-prompt" id="backupSavePrompt" hidden>
+      <div>
+        <strong>配置有未保存的修改</strong>
+        <p id="backupSaveHint">可以先保存，再开始备份。</p>
+      </div>
+      <button class="btn ghost sm" id="btnBackupQuickSave" type="button">立即保存</button>
+    </div>
+    <p class="backup-warning" id="backupWarning">备份会保留选区涉及的完整区域文件。建议先关闭 Minecraft，避免复制到正在写入的区域文件。</p>
+    <div class="backup-progress" id="backupProgress" hidden>
+      <span class="spinner"></span>
+      <span id="backupStatus">正在准备…</span>
+    </div>
+    <p class="dialog-error" id="backupError" hidden></p>
+    <pre class="backup-log" id="backupLog" hidden></pre>
+    <div class="dialog-actions">
+      <button type="button" class="btn ghost" id="btnBackupClose">取消</button>
+      <button type="button" class="btn ghost" id="btnBackupCopyZip" hidden>复制 zip 路径</button>
+      <button type="button" class="btn primary" id="btnBackupStart">开始备份</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="activityDialog" class="world-dialog activity-dialog">
+  <div class="dialog-card">
+    <div class="dialog-head">
+      <div class="dialog-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 12h3.5l2.5-6 5 12 2.5-6H21" />
+        </svg>
+      </div>
+      <div>
+        <h2>检测玩家活动区块</h2>
+        <p>生成或更新包含玩家活动区块的特殊选区</p>
+      </div>
+    </div>
+    <p class="dialog-tip">存档本身不记录“方块是否被玩家改过”。工具用区块的 <strong>InhabitedTime</strong>（玩家停留时间）判断：玩家活动过的区块会被加入选区。它可能包含只是路过、没有改动的区块，也可能漏掉用命令改动的区块。</p>
+    <!-- <p class="dialog-tip">配置中按维度保存最小活动时间，加载配置时会逐维度重新扫描并生成活动选区；网页备份会包含当前扫描到的活跃区块。config 格式保持兼容。</p> -->
+    <div class="activity-min-field">
+      <label class="input-label" for="activityMin">最小活动时间 · 当前维度（秒）</label>
+      <div class="activity-min-row">
+        <input id="activityMin" class="path-input activity-min-input" type="number" min="0" step="1" inputmode="decimal" autocomplete="off" value="0" />
+        <span>秒</span>
+      </div>
+      <p class="dialog-tip">按 <strong>20 游戏刻 = 1 秒</strong>换算为现实时间；0 表示只要停留过就算。每个维度单独设置，切换维度后这里的数值会跟着变。修改后重新扫描会直接更新当前维度的活动选区，不会新建。</p>
+    </div>
+    <div class="backup-summary" id="activitySummary"></div>
+    <p class="backup-warning">生成后，放大到 <strong>80%</strong> 以上右键区块，可把它标记为可抛弃并从选区移除。标记会保留，下次扫描不会再加回来。活动选区不能改名、不能手动追加，只能移除区块或删除整个选区。</p>
+    <p class="dialog-tip" id="activityDiscardHint" hidden></p>
+    <div class="backup-progress" id="activityProgress" hidden>
+      <span class="spinner"></span>
+      <span id="activityStatus">正在扫描区域文件…</span>
+    </div>
+    <p class="dialog-error" id="activityError" hidden></p>
+    <div class="dialog-actions edit-actions">
+      <button type="button" class="btn ghost sm" id="btnActivityClearDiscard" hidden>清除可抛弃标记</button>
+      <span class="actions-spacer"></span>
+      <button type="button" class="btn ghost" id="btnActivityCancel">取消</button>
+      <button type="button" class="btn primary" id="btnActivityStart">开始扫描</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="activityPromptDialog" class="world-dialog activity-dialog activity-prompt-dialog">
+  <div class="dialog-card">
+    <div class="dialog-head">
+      <div class="dialog-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 12h3.5l2.5-6 5 12 2.5-6H21" />
+        </svg>
+      </div>
+      <div>
+        <h2>加载活跃区块？</h2>
+        <p>直接打开存档，没有关联配置文件</p>
+      </div>
+    </div>
+    <p class="dialog-tip">工具可以读取区块的 <strong>InhabitedTime</strong>（玩家停留时间），把玩家活动过的区块生成「活跃区块」选区，用来参考或直接参与备份。扫描维度：<span id="activityPromptDims" class="mono"></span></p>
+    <p class="dialog-tip">区域文件较多时可能需要几十秒；不加载也可以，之后随时用顶部的「活跃区块」按钮扫描。</p>
+    <div class="dialog-actions">
+      <button type="button" class="btn ghost" id="btnActivityPromptNo">暂不加载</button>
+      <button type="button" class="btn primary" id="btnActivityPromptYes">扫描活跃区块</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="editDialog" class="world-dialog edit-dialog">
+  <form id="editForm" novalidate>
+    <div class="dialog-head">
+      <div class="dialog-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 20h9" />
+          <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+        </svg>
+      </div>
+      <div>
+        <h2>编辑选区</h2>
+        <p>修改名称；单个选区还可以精确调整坐标</p>
+      </div>
+    </div>
+    <label class="input-label" for="editDesc">名称</label>
+    <input id="editDesc" class="path-input name-input" type="text" maxlength="60" autocomplete="off" spellcheck="false" />
+    <div class="edit-coords" id="editCoords">
+      <label for="editX1"><span>X1</span><input id="editX1" class="coord-input" type="number" step="1" /></label>
+      <label for="editZ1"><span>Z1</span><input id="editZ1" class="coord-input" type="number" step="1" /></label>
+      <label for="editX2"><span>X2</span><input id="editX2" class="coord-input" type="number" step="1" /></label>
+      <label for="editZ2"><span>Z2</span><input id="editZ2" class="coord-input" type="number" step="1" /></label>
+    </div>
+    <p class="dialog-tip" id="editPartsNote" hidden></p>
+    <p class="dialog-error" id="editError" hidden></p>
+    <div class="dialog-actions edit-actions">
+      <button type="button" class="btn ghost" id="btnEditSplit" hidden>拆分为独立选区</button>
+      <span class="actions-spacer"></span>
+      <button type="button" class="btn ghost" id="btnEditCancel">取消</button>
+      <button type="submit" class="btn primary" id="btnEditSave">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="recoverDialog" class="world-dialog recover-dialog">
+  <div class="dialog-card">
+    <div class="dialog-head">
+      <div class="dialog-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 12a9 9 0 1 0 3-6.7" />
+          <path d="M3 4v5h5" />
+          <path d="M12 7.5V12l3 1.8" />
+        </svg>
+      </div>
+      <div>
+        <h2>恢复未保存的配置</h2>
+        <p>检测到上次关闭前的草稿，本机断电或浏览器异常退出后也可恢复</p>
+      </div>
+    </div>
+    <div class="recover-summary backup-summary" id="recoverSummary"></div>
+    <p class="dialog-tip">恢复后仍是未保存状态，请记得保存到配置文件。</p>
+    <p class="dialog-error" id="recoverError" hidden></p>
+    <div class="dialog-actions">
+      <button type="button" class="btn ghost" id="btnRecoverDiscard">丢弃草稿</button>
+      <button type="button" class="btn primary" id="btnRecoverRestore">恢复草稿</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="previewDialog" class="world-dialog preview-dialog">
+  <div class="dialog-card">
+    <div class="dialog-head">
+      <div class="dialog-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m8 6-5 6 5 6M16 6l5 6-5 6M13.5 4l-3 16" />
+        </svg>
+      </div>
+      <div>
+        <h2>JSON 预览</h2>
+        <p id="previewSub">复制或下载完整配置</p>
+      </div>
+    </div>
+    <textarea id="exportPreview" class="preview-code" readonly spellcheck="false" aria-label="配置预览">[]</textarea>
+    <p class="dialog-tip">完整配置包含存档路径、排除项和全部维度的选区。</p>
+    <div class="dialog-actions">
+      <button type="button" class="btn ghost" id="btnPreviewClose">关闭</button>
+      <button type="button" class="btn ghost" id="btnDownload">下载</button>
+      <button type="button" class="btn primary" id="btnCopy">复制 JSON</button>
+    </div>
+  </div>
+</dialog>
+
+<div class="context-menu" id="selMenu" hidden role="menu" aria-label="选区操作">
+  <div class="ctx-title" id="ctxTitle">选区</div>
+  <button type="button" role="menuitem" data-action="activate" id="ctxActivate">设为当前选区</button>
+  <button type="button" role="menuitem" data-action="edit" id="ctxEdit">编辑选区</button>
+  <button type="button" role="menuitem" data-action="focus">定位到选区</button>
+  <div class="ctx-sep"></div>
+  <button type="button" role="menuitem" class="danger" data-action="delete">删除选区</button>
+</div>
+
+<div class="toast" id="toast" hidden>
+  <span id="toastText"></span>
+  <button id="toastAction" type="button" hidden></button>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

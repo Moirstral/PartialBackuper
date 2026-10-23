@@ -1,0 +1,29 @@
+# --- Python caches ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Editor / OS noise ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Runtime state of the map selector (device/world specific) ---
+# last-opened world path; regenerated on first launch
+map_selector/world.json
+# rendered tile cache
+map_selector/.cache/
+
+# --- Backup config data (private; keep only the template + its README) ---
+configs/*
+!configs/config_template.json
+!configs/README_config.txt
+
+# --- Backup output archives ---
+*.zip
+
+# --- Unfinished experiment, not ready to publish ---
+map_selector_static/

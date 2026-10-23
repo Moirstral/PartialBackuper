@@ -1,0 +1,9 @@
+{
+    "language": "中文", 
+    "print_full_process": false, 
+    "ignore_errors": true,
+    "config_paths": [
+        "can/also/do/relOrAbs/paths/to/someConfig.json",
+        "configs"
+    ]
+}

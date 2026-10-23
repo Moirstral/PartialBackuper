@@ -1,0 +1,47 @@
+NOTICE
+======
+
+This repository is a fork of:
+
+    Yinhe2332767/PartialBackuper
+    https://github.com/Yinhe2332767/PartialBackuper
+
+Original author: Yinhe233 (author note in README.txt: "作者：Yinhe233，主要代码由 AI 生成").
+
+
+About the license
+-----------------
+
+At the time this fork was created, the upstream repository
+(Yinhe2332767/PartialBackuper) ships NO license file. Under copyright law,
+code without an explicit license is "all rights reserved" by its author; the
+upstream author has made it publicly readable but has not granted downstream
+reuse permissions.
+
+This fork therefore applies the GNU Affero General Public License v3.0
+(see LICENSE) to the portions authored or substantially rewritten here —
+principally the `map_selector/` web tool and the launcher scripts — for the
+contributor Moirstral. This reflects the contributor's intent that this work
+stay free and not be used for closed-source commercial products.
+
+Two explicit reservations, per the contributor's wishes:
+
+1. Honoring the original author. If Yinhe233 (or the upstream project) asks
+   for this fork to be taken down, this repository will be made private or
+   removed on request.
+
+2. Conforming to upstream once licensed. If the upstream repository later
+   adopts its own license, the license terms of THIS fork will be revised to
+   comply with the upstream terms for the inherited code, and this NOTICE and
+   LICENSE will be updated accordingly.
+
+The inherited files (script.py, backup_runner.py, global_config.json,
+requirements.txt, run_script.bat, configs/config_template.json,
+configs/README_config.txt, README.txt) remain the copyright of their original
+author. No license grant is implied for them by this fork beyond the upstream
+author's own terms once they are stated.
+
+
+Contact
+-------
+Fork maintainer: Moirstral <leey319@163.com>
