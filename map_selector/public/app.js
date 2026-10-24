@@ -18,7 +18,10 @@
   const LS_SELECTIONS = "mc-map-selections-v1";
   const LS_SETTINGS = "mc-map-settings-v1";
   const LS_DRAFT = "mc-map-draft-v1";
+  const LS_BROWSER_CONFIGS = "mc-map-browser-configs-v1";
+  const BROWSER_OPTION_PREFIX = "__browser__:";
   const LS_DISCARDS = "mc-map-discard-v1";
+  const LS_RIGHT_DRAG_TIP = "mc-map-right-drag-tip-v1";
   const ACTIVITY_COLOR = "#f59e0b";
 
   const DIM_COLORS = {
@@ -40,6 +43,7 @@
     serviceStatus: $id("serviceStatus"),
     worldIconImg: $id("worldIconImg"),
     worldName: $id("worldName"),
+    worldTags: $id("worldTags"),
     worldSub: $id("worldSub"),
     worldPath: $id("worldPath"),
     worldMeta: $id("worldMeta"),
@@ -77,8 +81,13 @@
     recoverError: $id("recoverError"),
     btnRecoverDiscard: $id("btnRecoverDiscard"),
     btnRecoverRestore: $id("btnRecoverRestore"),
-    configName: $id("configName"),
-    btnConfig: $id("btnConfig"),
+    configSelect: $id("configSelect"),
+    btnConfigSave: $id("btnConfigSave"),
+    dirtySwitchDialog: $id("dirtySwitchDialog"),
+    dirtySwitchNote: $id("dirtySwitchNote"),
+    btnDirtyCancel: $id("btnDirtyCancel"),
+    btnDirtyDiscard: $id("btnDirtyDiscard"),
+    btnDirtySave: $id("btnDirtySave"),
     btnBackup: $id("btnBackup"),
     btnBackupText: $id("btnBackupText"),
     selMenu: $id("selMenu"),
@@ -98,15 +107,6 @@
     btnEditSplit: $id("btnEditSplit"),
     btnEditCancel: $id("btnEditCancel"),
     btnEditSave: $id("btnEditSave"),
-    configDialog: $id("configDialog"),
-    configForm: $id("configForm"),
-    configSelect: $id("configSelect"),
-    configHint: $id("configHint"),
-    configNewName: $id("configNewName"),
-    configError: $id("configError"),
-    btnConfigCancel: $id("btnConfigCancel"),
-    btnConfigLoad: $id("btnConfigLoad"),
-    btnConfigSave: $id("btnConfigSave"),
     backupDialog: $id("backupDialog"),
     backupTitle: $id("backupTitle"),
     backupSub: $id("backupSub"),
@@ -122,6 +122,7 @@
     backupError: $id("backupError"),
     backupLog: $id("backupLog"),
     btnBackupClose: $id("btnBackupClose"),
+    btnBackupRevealZip: $id("btnBackupRevealZip"),
     btnBackupCopyZip: $id("btnBackupCopyZip"),
     btnBackupStart: $id("btnBackupStart"),
     backupSavePrompt: $id("backupSavePrompt"),
@@ -159,6 +160,9 @@
     btnFit: $id("btnFit"),
     btnZoomOut: $id("btnZoomOut"),
     btnZoomIn: $id("btnZoomIn"),
+    btnRightDragHelp: $id("btnRightDragHelp"),
+    rightDragDialog: $id("rightDragDialog"),
+    btnRightDragOk: $id("btnRightDragOk"),
     zoomLabel: $id("zoomLabel"),
     hudDim: $id("hudDim"),
     hudCoord: $id("hudCoord"),
@@ -173,6 +177,7 @@
     worldDialog: $id("worldDialog"),
     worldForm: $id("worldForm"),
     worldPathInput: $id("worldPathInput"),
+    btnBrowseWorld: $id("btnBrowseWorld"),
     dialogError: $id("dialogError"),
     btnDialogCancel: $id("btnDialogCancel"),
     btnDialogOpen: $id("btnDialogOpen"),
@@ -204,6 +209,7 @@
     toastTimer: null,
     lastPath: "",
     configFile: "",
+    configBrowser: false,
     configData: null,
     configExtras: [],
     ignores: [],
@@ -217,9 +223,11 @@
     pickRows: [],
     pickCursor: -1,
     configDirty: false,
+    configBusy: false,
     configWorldPath: "",
     configList: [],
     lastConfigFile: "",
+    lastConfigBrowser: false,
     backupJob: null,
     backupTimer: null,
     backupPollErrors: 0,
@@ -478,11 +486,11 @@
     setEmptyState();
 
     try {
-      const data = await api("/api/configs");
-      state.configList = Array.isArray(data.configs) ? data.configs : [];
+      await refreshConfigList();
     } catch (err) {
       state.configList = [];
-      showToast("无法读取 configs 目录：" + err.message, { error: true, duration: 5000 });
+      renderConfigPicker();
+      showToast("无法读取备份配置目录：" + err.message, { error: true, duration: 5000 });
     }
 
     if (!offerDraftRecovery()) await autoLoadPreferredConfig();
@@ -506,6 +514,9 @@
   }
 
   async function autoLoadPreferredConfig() {
+    if (state.lastConfigBrowser && state.lastPath) {
+      if (await restoreLastBrowserSession()) return;
+    }
     const preferred = state.lastConfigFile;
     const item = preferred
       ? state.configList.find((c) => c.file === preferred && !c.error)
@@ -524,18 +535,34 @@
     } else if (preferred) {
       state.lastConfigFile = "";
       saveSettings();
+      renderConfigPicker();
       showToast("上次使用的配置已不存在，请重新选择", { duration: 5000 });
+    }
+  }
+
+  async function restoreLastBrowserSession() {
+    try {
+      const info = await api("/api/world", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: state.lastPath }),
+      });
+      if (!isWorldInfo(info)) throw new Error("服务返回的存档数据无效");
+      applyWorld(info);
+      bindBrowserConfig(info);
+      return true;
+    } catch (err) {
+      state.lastConfigBrowser = false;
+      saveSettings();
+      showToast("上次的存档无法打开：" + err.message, { error: true, duration: 6000 });
+      return false;
     }
   }
 
   // ---------------------------------------------------------------- draft
 
   function hasUnsavedWork() {
-    if (!state.info) return false;
-    if (state.configFile) return !!state.configDirty;
-    return (
-      totalSelectionCount() > 0 || state.ignores.length > 0 || state.ignoreExtras.length > 0
-    );
+    return !!state.info && !!state.configFile && !!state.configDirty;
   }
 
   function cacheDraft() {
@@ -625,7 +652,7 @@
     state.pendingDraft = draft;
     dom.recoverSummary.replaceChildren();
     addRecoverRow("存档", (draft.worldName || "未命名存档") + " · " + draft.worldPath);
-    addRecoverRow("配置文件", draft.configFile || "未关联（临时草稿）");
+    addRecoverRow("配置文件", draft.configFile || "仅浏览器（草稿）");
     addRecoverRow("选区", draftSelectionCount(draft) + " 条");
     const ignoreCount =
       (Array.isArray(draft.ignores) ? draft.ignores.length : 0) +
@@ -661,6 +688,7 @@
         if (!info.dimensions.some((dim) => dim.id === dimId)) delete selections[dimId];
       }
       state.configFile = typeof draft.configFile === "string" ? draft.configFile : "";
+      state.configBrowser = !state.configFile;
       state.configData =
         draft.configData && typeof draft.configData === "object" ? draft.configData : null;
       state.configExtras = Array.isArray(draft.configExtras) ? draft.configExtras : [];
@@ -669,9 +697,11 @@
         Array.isArray(draft.ignores) ? draft.ignores : []
       );
       state.selections = selections;
-      state.configDirty = true;
+      state.configDirty = !state.configBrowser;
       state.configWorldPath = info.path;
+      state.lastConfigBrowser = state.configBrowser;
       if (state.configFile) state.lastConfigFile = state.configFile;
+      else persistBrowserConfig();
       const preferredDim =
         info.dimensions.find((dim) => dim.id === draft.dim) ||
         info.dimensions.find((dim) => (selections[dim.id] || []).length > 0) ||
@@ -684,6 +714,7 @@
       renderSelections();
       updateExport();
       saveSettings();
+      renderConfigPicker();
       if (preferredDim) {
         state.hasView = false;
         state.autoFit = true;
@@ -712,12 +743,31 @@
   function bindEvents() {
     dom.btnSwitchWorld.addEventListener("click", openWorldDialog);
     dom.btnOpenWorld.addEventListener("click", openWorldDialog);
-    dom.btnOpenConfig.addEventListener("click", () => openConfigDialog(false));
+    dom.btnOpenConfig.addEventListener("click", openConfigPicker);
     dom.btnRefresh.addEventListener("click", refreshWorld);
+    dom.worldPath.addEventListener("click", openSaveDir);
     dom.worldForm.addEventListener("submit", onWorldSubmit);
+    dom.btnBrowseWorld.addEventListener("click", browseWorldFolder);
     dom.btnDialogCancel.addEventListener("click", () => dom.worldDialog.close());
     dom.worldDialog.addEventListener("cancel", (event) => {
       if (dom.btnDialogOpen.disabled) event.preventDefault();
+    });
+
+    // 拖入文件时阻止浏览器直接导航到该文件；网页无法拿到拖入文件夹的绝对路径
+    const isFileDrag = (event) =>
+      !!event.dataTransfer &&
+      Array.from(event.dataTransfer.types || []).includes("Files");
+    window.addEventListener("dragover", (event) => {
+      if (!isFileDrag(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    });
+    window.addEventListener("drop", (event) => {
+      if (!isFileDrag(event)) return;
+      event.preventDefault();
+      if (state.info || dom.worldDialog.open) return;
+      showToast("浏览器不允许网页读取拖入文件夹的路径，请点「浏览…」选择", { duration: 5600 });
+      openWorldDialog();
     });
     dom.worldIconImg.addEventListener("error", () => {
       dom.worldIconImg.hidden = true;
@@ -751,6 +801,8 @@
     dom.btnFit.addEventListener("click", fitView);
     dom.btnZoomIn.addEventListener("click", () => zoomBy(1.3));
     dom.btnZoomOut.addEventListener("click", () => zoomBy(1 / 1.3));
+    dom.btnRightDragHelp.addEventListener("click", openRightDragTip);
+    dom.btnRightDragOk.addEventListener("click", () => dom.rightDragDialog.close());
 
     dom.ignoreForm.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -776,7 +828,17 @@
     dom.btnPreviewClose.addEventListener("click", () => dom.previewDialog.close());
     dom.btnCopy.addEventListener("click", copyExport);
     dom.btnDownload.addEventListener("click", downloadExport);
-    dom.btnConfig.addEventListener("click", () => openConfigDialog(false));
+    dom.configSelect.addEventListener("change", switchConfigFromSelect);
+    dom.btnConfigSave.addEventListener("click", saveCurrentConfig);
+    dom.btnDirtyCancel.addEventListener("click", () => closeDirtySwitch("cancel"));
+    dom.btnDirtyDiscard.addEventListener("click", () => closeDirtySwitch("discard"));
+    dom.btnDirtySave.addEventListener("click", () => closeDirtySwitch("save"));
+    dom.dirtySwitchDialog.addEventListener("close", () => {
+      if (!dirtySwitchResolve) return;
+      const resolve = dirtySwitchResolve;
+      dirtySwitchResolve = null;
+      resolve("cancel");
+    });
     dom.editForm.addEventListener("submit", saveEditedSelection);
     dom.btnEditCancel.addEventListener("click", () => dom.editDialog.close());
     dom.btnEditSplit.addEventListener("click", splitSelection);
@@ -789,20 +851,18 @@
       },
       true
     );
-    dom.configForm.addEventListener("submit", saveConfigFromDialog);
-    dom.btnConfigCancel.addEventListener("click", () => dom.configDialog.close());
-    dom.btnConfigLoad.addEventListener("click", loadConfigFromDialog);
-    dom.configSelect.addEventListener("change", updateConfigHint);
     dom.btnRecoverRestore.addEventListener("click", restorePendingDraft);
     dom.btnRecoverDiscard.addEventListener("click", discardPendingDraft);
     dom.recoverDialog.addEventListener("cancel", (event) => event.preventDefault());
     window.addEventListener("beforeunload", (event) => {
+      if (state.configBrowser) persistBrowserConfig();
       if (!hasUnsavedWork()) return;
       cacheDraft();
       event.preventDefault();
       event.returnValue = "";
     });
     window.addEventListener("pagehide", (event) => {
+      if (state.configBrowser) persistBrowserConfig();
       if (event.persisted) return;
       const body = JSON.stringify({ sid: SESSION_ID });
       // 停服依赖这条“页面关闭上报”，卸载阶段 sendBeacon 比 fetch(keepalive) 更可靠
@@ -825,6 +885,7 @@
     dom.btnBackupStart.addEventListener("click", startBackup);
     dom.btnBackupClose.addEventListener("click", () => dom.backupDialog.close());
     dom.btnBackupCopyZip.addEventListener("click", copyZipPath);
+    dom.btnBackupRevealZip.addEventListener("click", revealBackupZip);
     dom.btnBackupQuickSave.addEventListener("click", quickSaveBackupConfig);
     dom.chunkOnlyToggle.addEventListener("change", onChunkOnlyToggle);
     dom.backupDialog.addEventListener("close", onBackupDialogClose);
@@ -864,7 +925,8 @@
         return;
       }
       hideSelectionMenu();
-      deleteChunkAt(world);
+      // 右键删除已由 pointerdown 处理；这里只兜底没有 pointerdown 的浏览器。
+      if (performance.now() - lastEraseAt > 700) deleteChunkAt(world);
     });
     dom.canvas.addEventListener("mousedown", (event) => {
       if (event.button === 1) event.preventDefault();
@@ -896,6 +958,9 @@
       if (saved && typeof saved.snap === "boolean") state.snap = saved.snap;
       if (saved && typeof saved.lastPath === "string") state.lastPath = saved.lastPath;
       if (saved && typeof saved.lastConfigFile === "string") state.lastConfigFile = saved.lastConfigFile;
+      if (saved && typeof saved.lastConfigBrowser === "boolean") {
+        state.lastConfigBrowser = saved.lastConfigBrowser;
+      }
       if (saved && typeof saved.showWaypoints === "boolean") state.showWaypoints = saved.showWaypoints;
       if (saved && typeof saved.chunkOnlyBackup === "boolean") state.chunkOnlyBackup = saved.chunkOnlyBackup;
       if (saved && Number.isFinite(saved.activityMinSeconds) && saved.activityMinSeconds >= 0) {
@@ -925,6 +990,7 @@
           snap: state.snap,
           lastPath: state.lastPath,
           lastConfigFile: state.lastConfigFile,
+          lastConfigBrowser: state.lastConfigBrowser,
           showWaypoints: state.showWaypoints,
           chunkOnlyBackup: state.chunkOnlyBackup,
           activityMinSeconds: state.activityMinDefault,
@@ -953,14 +1019,21 @@
     const keepDimId = opts.keepDim ? state.dim : null;
     const keepCamera = opts.keepView ? { ...state.camera } : null;
 
-    if (state.configFile && state.configWorldPath && info.path !== state.configWorldPath) {
+    if (
+      (state.configFile || state.configBrowser) &&
+      state.configWorldPath &&
+      !sameWorldPath(info.path, state.configWorldPath)
+    ) {
+      if (state.configBrowser) persistBrowserConfig();
       state.configFile = "";
+      state.configBrowser = false;
       state.configData = null;
       state.configExtras = [];
       state.ignores = [];
       state.ignoreExtras = [];
       state.configDirty = false;
       state.configWorldPath = "";
+      dom.configSelect.value = "";
     }
 
     state.token += 1;
@@ -1097,7 +1170,7 @@
       paragraph.textContent = "这个存档下没有可显示的 region 目录，请确认选择的是包含 level.dat 的存档文件夹。";
     } else {
       heading.textContent = "加载备份配置，开始选区";
-      paragraph.textContent = "选择配置后会按其中的 save_path 打开存档。还没有配置时，也可以先直接打开存档框选，再另存为新配置。";
+      paragraph.textContent = "选择配置后会按其中的存档路径打开存档。还没有配置时，点「直接打开存档」选择存档文件夹，框选后点「保存」即可。";
     }
   }
 
@@ -1119,9 +1192,13 @@
     clearTiles();
     dom.stageEmpty.hidden = false;
     dom.worldName.textContent = "尚未加载存档";
+    dom.worldTags.textContent = "";
+    dom.worldTags.hidden = true;
+    dom.worldSub.hidden = false;
     dom.worldSub.textContent = "加载配置或直接打开存档";
     dom.worldPath.textContent = "—";
     dom.worldPath.title = "";
+    dom.worldPath.classList.remove("loaded");
     dom.worldMeta.textContent = "";
     dom.worldMeta.hidden = true;
     dom.worldIconImg.hidden = true;
@@ -1139,16 +1216,56 @@
     requestDraw();
   }
 
+  const GAME_MODES = {
+    0: { label: "生存", cls: "mode-survival" },
+    1: { label: "创造", cls: "mode-creative" },
+    2: { label: "冒险", cls: "mode-adventure" },
+    3: { label: "旁观", cls: "mode-spectator" },
+  };
+
+  function worldTag(label, cls, title) {
+    const el = document.createElement("span");
+    el.className = "world-tag" + (cls ? " " + cls : "");
+    el.textContent = label;
+    if (title) el.title = title;
+    return el;
+  }
+
+  function renderWorldTags(info) {
+    const tags = [];
+    if (info.version) {
+      tags.push(
+        worldTag(
+          info.version,
+          "version",
+          info.dataVersion ? "DataVersion " + info.dataVersion : ""
+        )
+      );
+    } else if (info.dataVersion) {
+      tags.push(worldTag("版本未知", "version", "DataVersion " + info.dataVersion));
+    }
+    if (info.hardcore) {
+      tags.push(worldTag("极限", "hardcore", "极限模式：死亡后无法复活"));
+    } else {
+      const mode = GAME_MODES[info.gameType];
+      if (mode) tags.push(worldTag(mode.label, mode.cls, "游戏模式：" + mode.label));
+    }
+    if (info.allowCommands) {
+      tags.push(worldTag("作弊", "cheats", "已开启作弊（允许命令）"));
+    }
+    dom.worldTags.replaceChildren(...tags);
+    dom.worldTags.hidden = tags.length === 0;
+  }
+
   function renderWorld() {
     const info = state.info;
     if (!info) return;
     dom.worldName.textContent = info.name || "未命名存档";
-    const parts = [];
-    if (info.version) parts.push(info.version);
-    if (info.dataVersion) parts.push("DataVersion " + info.dataVersion);
-    dom.worldSub.textContent = parts.length ? parts.join(" · ") : "Minecraft 存档";
+    renderWorldTags(info);
+    dom.worldSub.hidden = true;
     dom.worldPath.textContent = info.path;
-    dom.worldPath.title = info.path;
+    dom.worldPath.title = info.path + "\n点击在文件管理器中定位存档";
+    dom.worldPath.classList.add("loaded");
     dom.worldMeta.textContent = info.lastPlayedMs
       ? "最后游玩 " + formatStamp(info.lastPlayedMs, true)
       : "";
@@ -1171,6 +1288,20 @@
     dom.worldStats.hidden = false;
     dom.btnRefresh.disabled = false;
     dom.btnIgnoreBrowse.disabled = false;
+  }
+
+  async function openSaveDir() {
+    if (!state.info) return;
+    try {
+      await api("/api/open-save-dir", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      showToast("已定位到存档文件夹");
+    } catch (err) {
+      showToast(err.message || "无法打开存档目录", { error: true });
+    }
   }
 
   async function refreshWorld() {
@@ -1207,12 +1338,35 @@
     }, 30);
   }
 
+  async function browseWorldFolder() {
+    if (dom.btnBrowseWorld.disabled) return;
+    dom.dialogError.hidden = true;
+    const label = dom.btnBrowseWorld.textContent;
+    dom.btnBrowseWorld.disabled = true;
+    dom.btnBrowseWorld.textContent = "选择中…";
+    try {
+      const data = await api("/api/pick-folder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          initial: dom.worldPathInput.value.trim() || state.lastPath || "",
+        }),
+      });
+      if (data && data.path) {
+        dom.worldPathInput.value = data.path;
+        await onWorldSubmit({ preventDefault() {} });
+      }
+    } catch (err) {
+      showDialogError("无法打开文件夹选择窗口：" + (err.message || ""));
+    } finally {
+      dom.btnBrowseWorld.disabled = false;
+      dom.btnBrowseWorld.textContent = label;
+    }
+  }
+
   async function onWorldSubmit(event) {
     event.preventDefault();
-    let path = dom.worldPathInput.value.trim();
-    if (path.length > 1 && path.startsWith('"') && path.endsWith('"')) {
-      path = path.slice(1, -1).trim();
-    }
+    const path = normalizePathInput(dom.worldPathInput.value);
     if (!path) {
       showDialogError("请输入存档文件夹路径");
       return;
@@ -1232,7 +1386,25 @@
       state.lastPath = info.path;
       applyWorld(info);
       dom.worldDialog.close();
-      showToast("已加载「" + (info.name || "存档") + "」");
+      const match = findConfigForWorld(info.path);
+      if (match) {
+        try {
+          await loadConfigFile(match.file, { skipWorld: true });
+          showToast(
+            "已加载「" + (info.name || "存档") + "」并匹配配置「" + match.file + "」",
+            { duration: 5600 }
+          );
+        } catch (err) {
+          showToast(
+            "匹配到配置「" + match.file + "」但加载失败：" + (err.message || "未知错误") +
+              "，已改用浏览器配置",
+            { error: true, duration: 6500 }
+          );
+          bindBrowserConfig(info);
+        }
+      } else {
+        bindBrowserConfig(info);
+      }
       maybePromptActivityScan(info);
     } catch (err) {
       showDialogError(err.message || "加载失败");
@@ -1708,7 +1880,8 @@
     } catch (err) {
       showToast("无法把选区保存到浏览器本地存储", { error: true, duration: 4200 });
     }
-    if (!opts.quiet || !state.configFile) cacheDraft();
+    if (state.configBrowser) persistBrowserConfig();
+    else if (!opts.quiet) cacheDraft();
   }
 
   function totalSelectionCount() {
@@ -1896,7 +2069,7 @@
       dom.activeBadgeLead.textContent = special ? "活动选区" : "正在添加到";
       dom.activeBadgeName.textContent = sel.desc || "选区";
       dom.activeBadgeHint.textContent = special
-        ? "右键区块标记可抛弃 · 拖拽会新建普通选区"
+        ? "右键拖拽区块标记可抛弃 · 左键拖拽会新建普通选区"
         : "继续拖拽追加";
     }
   }
@@ -1910,7 +2083,7 @@
     if (notify && sel) {
       showToast(
         sel.special === "activity"
-          ? "活动选区「" + sel.desc + "」· 放大后右键区块可标记为可抛弃 · 拖拽会新建普通选区"
+          ? "活动选区「" + sel.desc + "」· 放大后右键拖拽区块可标记为可抛弃 · 左键拖拽会新建普通选区"
           : "正在添加到「" + sel.desc + "」· 继续拖拽即可追加区块",
         { duration: 5600 }
       );
@@ -2088,7 +2261,7 @@
   function openEditDialog(sel) {
     if (!sel) return;
     if (sel.special === "activity") {
-      showToast("活跃区块不能改名；右键区块可标记为可抛弃，或直接删除整个选区", { duration: 5200 });
+      showToast("活跃区块不能改名；右键单击或拖拽区块可标记为可抛弃，或直接删除整个选区", { duration: 5200 });
       return;
     }
     state.editingSelId = sel.id;
@@ -2287,30 +2460,133 @@
     return result;
   }
 
-  function deleteChunkAt(world) {
+  let lastEraseAt = 0;
+
+  function eraseTipSeen() {
+    try {
+      return localStorage.getItem(LS_RIGHT_DRAG_TIP) === "1";
+    } catch (err) {
+      return true;
+    }
+  }
+
+  function markEraseTipSeen() {
+    try {
+      localStorage.setItem(LS_RIGHT_DRAG_TIP, "1");
+    } catch (err) {
+      /* first-use tip is optional */
+    }
+  }
+
+  function openRightDragTip() {
+    if (dom.rightDragDialog.open) return;
+    dom.rightDragDialog.showModal();
+  }
+
+  function showZoomHint(hit) {
+    const percent = Math.round(CHUNK_ZOOM * 100) + "%";
+    showToast(
+      hit.special === "activity"
+        ? "放大到 " + percent + " 以上后，右键单击/拖拽可把区块标记为可抛弃"
+        : "放大到 " + percent + " 以上后，右键单击/拖拽可删除区块",
+      { duration: 4600 }
+    );
+  }
+
+  function eraseSnapshot(dim) {
+    return {
+      worldPath: state.info ? state.info.path : "",
+      dimId: dim.id,
+      list: (state.selections[dim.id] || []).slice(),
+      active: state.activeSelId,
+      discards: discardKeys(dim.id).slice(),
+    };
+  }
+
+  function restoreDiscardKeys(dimId, keys) {
+    if (!state.info) return;
+    const path = state.info.path;
+    if (!state.discardStore[path]) state.discardStore[path] = {};
+    state.discardStore[path][dimId] = keys.slice();
+    saveDiscards();
+  }
+
+  function restoreEraseSnapshot(snap) {
+    if (!state.info || state.info.path !== snap.worldPath) return;
+    const current = currentDim();
+    state.selections[snap.dimId] = snap.list;
+    if (current && current.id === snap.dimId) state.activeSelId = snap.active;
+    restoreDiscardKeys(snap.dimId, snap.discards);
+    updateActiveUI();
+    persistSelections();
+    renderSelections();
+    updateExport();
+    requestDraw();
+  }
+
+  function refreshAfterErase() {
+    persistSelections();
+    renderSelections();
+    updateExport();
+    requestDraw();
+  }
+
+  function discardChunkSilent(sel, world) {
     const dim = currentDim();
-    if (!dim) return;
-    if (selectionUnit() !== CHUNK) {
-      const hit = hitSelectionForDelete(world);
-      if (hit) {
-        showToast(
-          hit.special === "activity"
-            ? "放大到 " + Math.round(CHUNK_ZOOM * 100) + "% 以上后，右键可把区块标记为可抛弃"
-            : "放大到 " + Math.round(CHUNK_ZOOM * 100) + "% 以上后，右键可删除单个区块",
-          { duration: 4600 }
-        );
-      }
-      return;
-    }
-    const sel = hitSelectionForDelete(world);
-    if (!sel) return;
-    if (sel.special === "activity") {
-      markChunkDiscard(sel, world);
-      return;
-    }
+    if (!dim) return null;
     const list = state.selections[dim.id] || [];
     const index = list.findIndex((item) => item.id === sel.id);
-    if (index < 0) return;
+    if (index < 0) return null;
+    const cx = Math.floor(world.x / CHUNK);
+    const cz = Math.floor(world.z / CHUNK);
+    const key = cx + "," + cz;
+    if (discardKeys(dim.id).includes(key)) return null;
+    const cut = {
+      x1: cx * CHUNK,
+      z1: cz * CHUNK,
+      x2: cx * CHUNK + CHUNK - 1,
+      z2: cz * CHUNK + CHUNK - 1,
+    };
+    const nextParts = subtractRectFromParts(getParts(sel), cut);
+    let activityUpdate = null;
+    if (sel.activity) {
+      const remaining = sel.activity.chunks.filter(
+        (item) => !(item[0] === cx && item[1] === cz)
+      );
+      if (remaining.length) activityUpdate = { chunks: remaining };
+    }
+    let removedSelection = false;
+    if (!nextParts.length) {
+      list.splice(index, 1);
+      removedSelection = true;
+    } else {
+      const updated = normalizeSelection({
+        id: sel.id,
+        desc: sel.desc,
+        special: "activity",
+        parts: nextParts,
+        activity: activityUpdate,
+      });
+      if (!updated) return null;
+      list[index] = updated;
+    }
+    addDiscardKey(dim.id, key);
+    if (removedSelection && state.activeSelId === sel.id) {
+      state.activeSelId = "";
+      updateActiveUI();
+    }
+    return { kind: "discarded", sel, cx, cz, removedSelection };
+  }
+
+  function eraseChunkSilent(world) {
+    const dim = currentDim();
+    if (!dim) return null;
+    const sel = hitSelectionForDelete(world);
+    if (!sel) return null;
+    if (sel.special === "activity") return discardChunkSilent(sel, world);
+    const list = state.selections[dim.id] || [];
+    const index = list.findIndex((item) => item.id === sel.id);
+    if (index < 0) return null;
     const cx = Math.floor(world.x / CHUNK);
     const cz = Math.floor(world.z / CHUNK);
     const cut = {
@@ -2320,107 +2596,101 @@
       z2: cz * CHUNK + CHUNK - 1,
     };
     const nextParts = mergeRectList(subtractRectFromParts(getParts(sel), cut));
-    const before = list.slice();
-    const beforeActive = state.activeSelId;
-    let message;
+    let removedSelection = false;
     if (!nextParts.length) {
       list.splice(index, 1);
+      removedSelection = true;
       if (state.activeSelId === sel.id) {
         state.activeSelId = "";
         updateActiveUI();
       }
-      message = "已删除「" + sel.desc + "」的最后一个区块，选区已移除";
     } else {
       const updated = normalizeSelection({ id: sel.id, desc: sel.desc, parts: nextParts });
-      if (!updated) return;
+      if (!updated) return null;
       list[index] = updated;
-      message =
-        "已从「" + sel.desc + "」删除区块 X " + cx * CHUNK + " · Z " + cz * CHUNK;
     }
-    persistSelections();
-    renderSelections();
-    updateExport();
-    requestDraw();
-    showToast(message, {
+    return { kind: "removed", sel, cx, cz, removedSelection };
+  }
+
+  function eraseClickMessage(result) {
+    const coord = "X " + result.cx * CHUNK + " · Z " + result.cz * CHUNK;
+    if (result.kind === "discarded") {
+      return result.removedSelection
+        ? "已把区块 " + coord + " 标记为可抛弃，活动选区已移除"
+        : "已把区块 " + coord + " 标记为可抛弃，并从「" + result.sel.desc + "」移除";
+    }
+    return result.removedSelection
+      ? "已删除「" + result.sel.desc + "」的最后一个区块，选区已移除"
+      : "已从「" + result.sel.desc + "」删除区块 " + coord;
+  }
+
+  function eraseDragMessage(drag) {
+    const parts = [];
+    if (drag.removed) parts.push("已删除 " + drag.removed + " 个区块");
+    if (drag.discarded) parts.push("已标记 " + drag.discarded + " 个区块为可抛弃");
+    return parts.join("，");
+  }
+
+  function deleteChunkAt(world) {
+    const dim = currentDim();
+    if (!dim) return;
+    if (selectionUnit() !== CHUNK) {
+      const hit = hitSelectionForDelete(world);
+      if (hit) showZoomHint(hit);
+      return;
+    }
+    const snap = eraseSnapshot(dim);
+    const result = eraseChunkSilent(world);
+    if (!result) return;
+    refreshAfterErase();
+    showToast(eraseClickMessage(result), {
       action: "撤销",
       duration: 7000,
-      onAction: () => {
-        state.selections[dim.id] = before;
-        state.activeSelId = beforeActive;
-        updateActiveUI();
-        persistSelections();
-        renderSelections();
-        updateExport();
-        requestDraw();
-      },
+      onAction: () => restoreEraseSnapshot(snap),
     });
   }
 
-  function markChunkDiscard(sel, world) {
-    const dim = currentDim();
-    if (!dim) return;
-    const list = state.selections[dim.id] || [];
-    const index = list.findIndex((item) => item.id === sel.id);
-    if (index < 0) return;
-    const cx = Math.floor(world.x / CHUNK);
-    const cz = Math.floor(world.z / CHUNK);
-    const key = cx + "," + cz;
-    const cut = {
-      x1: cx * CHUNK,
-      z1: cz * CHUNK,
-      x2: cx * CHUNK + CHUNK - 1,
-      z2: cz * CHUNK + CHUNK - 1,
-    };
-    const nextParts = subtractRectFromParts(getParts(sel), cut);
-    const before = list.slice();
-    const beforeActive = state.activeSelId;
-    let activityUpdate = null;
-    if (sel.activity) {
-      const remaining = sel.activity.chunks.filter(
-        (item) => !(item[0] === cx && item[1] === cz)
-      );
-      if (remaining.length) activityUpdate = { chunks: remaining };
+  function applyEraseMove(drag, world) {
+    const dx = world.x - drag.lastWorld.x;
+    const dz = world.z - drag.lastWorld.z;
+    const steps = Math.max(
+      1,
+      Math.ceil(Math.max(Math.abs(dx), Math.abs(dz)) / (CHUNK / 2))
+    );
+    let changed = false;
+    for (let i = 1; i <= steps; i += 1) {
+      const point = {
+        x: drag.lastWorld.x + (dx * i) / steps,
+        z: drag.lastWorld.z + (dz * i) / steps,
+      };
+      const result = eraseChunkSilent(point);
+      if (!result) continue;
+      changed = true;
+      if (result.kind === "discarded") drag.discarded += 1;
+      else drag.removed += 1;
+      drag.lastResult = result;
     }
-    addDiscardKey(dim.id, key);
-    let message;
-    if (!nextParts.length) {
-      list.splice(index, 1);
-      if (state.activeSelId === sel.id) {
-        state.activeSelId = "";
-        updateActiveUI();
-      }
-      message = "已把区块 X " + cx * CHUNK + " · Z " + cz * CHUNK + " 标记为可抛弃，活动选区已移除";
-    } else {
-      const updated = normalizeSelection({
-        id: sel.id,
-        desc: sel.desc,
-        special: "activity",
-        parts: nextParts,
-        activity: activityUpdate,
-      });
-      if (!updated) return;
-      list[index] = updated;
-      message =
-        "已把区块 X " + cx * CHUNK + " · Z " + cz * CHUNK + " 标记为可抛弃，并从「" +
-        sel.desc + "」移除";
+    drag.lastWorld = world;
+    if (changed) {
+      drag.changed = true;
+      refreshAfterErase();
     }
-    persistSelections();
-    renderSelections();
-    updateExport();
-    requestDraw();
+  }
+
+  function finishEraseDrag(drag) {
+    dom.dragTip.classList.remove("erasing");
+    lastEraseAt = performance.now();
+    if (!drag.changed) return;
+    const snap = drag.snapshot;
+    const total = drag.removed + drag.discarded;
+    const message =
+      total === 1 && !drag.moved && drag.lastResult
+        ? eraseClickMessage(drag.lastResult)
+        : eraseDragMessage(drag);
     showToast(message, {
       action: "撤销",
       duration: 7000,
-      onAction: () => {
-        removeDiscardKey(dim.id, key);
-        state.selections[dim.id] = before;
-        state.activeSelId = beforeActive;
-        updateActiveUI();
-        persistSelections();
-        renderSelections();
-        updateExport();
-        requestDraw();
-      },
+      onAction: () => restoreEraseSnapshot(snap),
     });
   }
 
@@ -2652,17 +2922,6 @@
     const dims = state.discardStore[path];
     if (!dims[dimId]) dims[dimId] = [];
     if (!dims[dimId].includes(key)) dims[dimId].push(key);
-    saveDiscards();
-  }
-
-  function removeDiscardKey(dimId, key) {
-    if (!state.info) return;
-    const dims = state.discardStore[state.info.path];
-    const list = dims && dims[dimId];
-    if (!Array.isArray(list)) return;
-    const index = list.indexOf(key);
-    if (index >= 0) list.splice(index, 1);
-    if (!list.length && dims) delete dims[dimId];
     saveDiscards();
   }
 
@@ -2967,7 +3226,7 @@
     dom.activityDialog.close();
     showToast(
       (existing ? "已更新「" : "已生成「") + updated.desc + "」· " + built.chunks +
-        " 个活跃区块" + filterText + suffix + " · 放大后右键区块可标记可抛弃",
+        " 个活跃区块" + filterText + suffix + " · 放大后右键拖拽区块可标记可抛弃",
       {
         action: "撤销",
         duration: 9000,
@@ -3157,8 +3416,13 @@
   }
 
   function markConfigChanged() {
-    if (state.configFile) state.configDirty = true;
-    cacheDraft();
+    if (state.configBrowser) {
+      persistBrowserConfig();
+    } else if (state.configFile) {
+      state.configDirty = true;
+      cacheDraft();
+    }
+    updateConfigUI();
   }
 
   function renderIgnores() {
@@ -3751,17 +4015,29 @@
   }
 
   function updateConfigUI() {
-    const hasSel = totalSelectionCount() > 0;
-    if (state.configFile) {
-      dom.configName.textContent = state.configFile + (state.configDirty ? " · 未保存" : "");
-      dom.configName.classList.toggle("dirty", state.configDirty);
-      dom.configName.title =
-        state.configFile + (state.configDirty ? " · 有未保存的配置修改" : " · 已保存");
-    } else {
-      dom.configName.textContent = hasSel ? "未关联（临时选区）" : "未关联";
-      dom.configName.classList.remove("dirty");
-      dom.configName.title = hasSel ? "保存到 configs 后可直接备份" : "加载已有配置或框选区块";
+    const select = dom.configSelect;
+    const placeholder = select.options[0];
+    if (placeholder && !placeholder.value) {
+      placeholder.text = !state.configList.length && !browserConfigEntries().length
+        ? "还没有备份配置"
+        : state.info && totalSelectionCount() > 0 && !state.configFile && !state.configBrowser
+          ? "未关联（临时选区）"
+          : "选择已有配置…";
     }
+    const option = select.options[select.selectedIndex];
+    if (option && option.value && option.value === state.configFile) {
+      option.text = state.configFile + (state.configDirty ? " · 未保存" : "");
+    }
+    select.classList.toggle("dirty", !!state.configFile && state.configDirty);
+    select.classList.toggle("local", !!state.configBrowser);
+    select.title = state.configFile
+      ? state.configFile + (state.configDirty ? " · 有未保存的配置修改" : " · 已保存")
+      : state.configBrowser
+        ? "浏览器配置「" + browserConfigLabel() + "」：只保存在本浏览器，关闭页面不会丢失；点「保存」写入配置文件"
+        : state.info
+          ? "选择已有配置即可切换；点「保存」会存为 " + deriveConfigName()
+          : "先打开存档，再选择或保存配置";
+    updateConfigControls();
     updateBackupUI();
   }
 
@@ -3783,101 +4059,117 @@
         ? "先框选至少一个区块"
         : state.configDirty
           ? "配置有未保存修改，开始备份前会提示保存"
-          : "";
+          : state.configBrowser
+            ? "浏览器配置只保存在本浏览器，备份不会写入配置文件"
+            : "";
   }
 
-  function showConfigError(message) {
-    dom.configError.textContent = message;
-    dom.configError.hidden = false;
+  function updateConfigControls() {
+    const busy = !!state.configBusy;
+    dom.configSelect.disabled =
+      busy || (!state.configList.length && !browserConfigEntries().length);
+    dom.btnConfigSave.disabled = busy || !state.info;
+    dom.btnConfigSave.title = !state.info
+      ? "先打开存档，再保存配置"
+      : state.configFile
+        ? "保存到「" + state.configFile + "」"
+        : state.configBrowser
+          ? "把浏览器配置保存为「" + deriveConfigName() + "」"
+          : "保存为「" + deriveConfigName() + "」";
+    const savePrimary = !busy && !!state.info && (state.configDirty || !state.configFile);
+    dom.btnConfigSave.classList.toggle("primary", savePrimary);
+    dom.btnConfigSave.classList.toggle("ghost", !savePrimary);
   }
 
   function setConfigBusy(busy) {
-    dom.configSelect.disabled = busy;
-    dom.btnConfigLoad.disabled = busy || !dom.configSelect.value;
-    dom.btnConfigSave.disabled = busy || !state.info;
-    dom.btnConfigSave.textContent = busy ? "处理中…" : "保存配置";
+    state.configBusy = busy;
+    updateConfigControls();
   }
 
-  function configSelectionCount(item) {
-    return (Number(item.partialCount) || 0) + (Number(item.activityCount) || 0);
-  }
-
-  function fillConfigSelect() {
+  function renderConfigPicker() {
     const select = dom.configSelect;
+    const previous = select.value;
+    const browserEntries = browserConfigEntries();
     select.replaceChildren();
     select.append(
-      new Option(state.configList.length ? "选择已有配置…" : "configs 目录中没有配置", "")
+      new Option(
+        state.configList.length || browserEntries.length ? "选择已有配置…" : "还没有备份配置",
+        ""
+      )
     );
     for (const item of state.configList) {
-      const suffix = item.error ? "读取失败" : configSelectionCount(item) + " 条选区";
-      select.append(new Option(item.file + " · " + suffix, item.file));
+      select.append(
+        new Option(item.file + (item.error ? " · 读取失败" : ""), item.file)
+      );
     }
-    const preferred = state.configFile || state.lastConfigFile;
-    if (preferred && state.configList.some((item) => item.file === preferred)) {
-      select.value = preferred;
-    } else if (state.configList.length === 1 && !state.configList[0].error) {
-      select.value = state.configList[0].file;
+    for (const entry of browserEntries) {
+      select.append(
+        new Option(entry.name + " · 仅浏览器", BROWSER_OPTION_PREFIX + entry.key)
+      );
     }
+    const preferred = state.configBrowser && state.info
+      ? BROWSER_OPTION_PREFIX + browserConfigKey(state.info.path)
+      : [state.configFile, previous, state.lastConfigFile].find(
+          (file) => file && state.configList.some((c) => c.file === file)
+        ) || "";
+    select.value = Array.from(select.options).some((o) => o.value === preferred)
+      ? preferred
+      : "";
+    updateConfigUI();
+    updateEmptyStageActions();
   }
 
-  function updateConfigHint() {
-    const item = state.configList.find((c) => c.file === dom.configSelect.value);
-    if (!item) {
-      dom.configHint.textContent =
-        "选择已有配置加载到地图；或在下面输入文件名，把当前选区另存为新配置。";
-      dom.btnConfigLoad.disabled = true;
+  async function refreshConfigList() {
+    const data = await api("/api/configs");
+    state.configList = Array.isArray(data.configs) ? data.configs : [];
+    renderConfigPicker();
+  }
+
+  function updateEmptyStageActions() {
+    const hasConfigs = state.configList.length > 0 || browserConfigEntries().length > 0;
+    dom.btnOpenConfig.hidden = !hasConfigs;
+    dom.btnOpenWorld.classList.toggle("primary", !hasConfigs);
+    dom.btnOpenWorld.classList.toggle("ghost", hasConfigs);
+  }
+
+  function openConfigPicker() {
+    if (!state.configList.length && !browserConfigEntries().length) {
+      showToast("还没有备份配置。先「直接打开存档」，框选后点「保存」。", {
+        duration: 5600,
+      });
       return;
     }
-    if (item.error) {
-      dom.configHint.textContent = "读取失败：" + item.error;
-      dom.btnConfigLoad.disabled = true;
-      return;
+    dom.configSelect.focus();
+    if (typeof dom.configSelect.showPicker === "function") {
+      try {
+        dom.configSelect.showPicker();
+        return;
+      } catch (err) {
+        /* 浏览器拒绝时退回提示 */
+      }
     }
-    dom.configHint.textContent =
-      (item.savePath || "缺少 save_path") + " · " + configSelectionCount(item) + " 条区域配置";
-    dom.btnConfigLoad.disabled = false;
+    showToast("在左侧「配置文件」里选择要切换的配置", { duration: 4000 });
   }
 
-  async function openConfigDialog(preferSave) {
-    dom.configError.hidden = true;
-    dom.configNewName.value = "";
-    dom.configSelect.disabled = true;
-    dom.btnConfigLoad.disabled = true;
-    dom.btnConfigSave.disabled = true;
-    dom.btnConfigSave.title = state.info ? "" : "先加载存档";
-    dom.configSelect.replaceChildren(new Option("正在读取 configs…", ""));
-    dom.configHint.textContent = "正在读取配置目录…";
-    if (!dom.configDialog.open) dom.configDialog.showModal();
-    try {
-      const data = await api("/api/configs");
-      state.configList = Array.isArray(data.configs) ? data.configs : [];
-    } catch (err) {
-      state.configList = [];
-      dom.configHint.textContent = "无法读取配置目录：" + err.message;
-    }
-    fillConfigSelect();
-    dom.configSelect.disabled = false;
-    updateConfigHint();
-    dom.btnConfigSave.disabled = !state.info;
-    window.setTimeout(() => {
-      if (preferSave) dom.configNewName.focus();
-      else dom.configSelect.focus();
-    }, 30);
-  }
-
-  async function loadConfigFile(file) {
+  async function loadConfigFile(file, options) {
     const res = await api("/api/configs/load", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ file }),
     });
-    const parsed = applyLoadedConfig(res);
+    const parsed = applyLoadedConfig(res, options);
     return { res, parsed };
   }
 
-  function applyLoadedConfig(res) {
+  function applyLoadedConfig(res, options) {
     if (!isWorldInfo(res.world)) throw new Error("服务返回的存档数据无效");
-    applyWorld(res.world);
+    const skipWorld =
+      !!(options && options.skipWorld) &&
+      !!state.info &&
+      sameWorldPath(res.world.path, state.info.path);
+    if (!skipWorld) applyWorld(res.world);
+    state.configBrowser = false;
+    removeBrowserConfig(res.world.path);
     const parsed = selectionsFromConfig(res.config || {});
     state.configFile = "";
     state.selections = parsed.selections;
@@ -3899,7 +4191,9 @@
     state.configDirty = false;
     state.configWorldPath = res.world.path;
     state.lastConfigFile = res.file;
+    state.lastConfigBrowser = false;
     saveSettings();
+    renderConfigPicker();
 
     const dimWithSel = res.world.dimensions.find(
       (dim) => (parsed.selections[dim.id] || []).length > 0
@@ -3989,37 +4283,350 @@
     }
   }
 
-  async function loadConfigFromDialog() {
-    const file = dom.configSelect.value;
-    if (!file) {
-      showConfigError("请选择一个已有配置");
+  let dirtySwitchResolve = null;
+
+  function askSaveBeforeSwitch() {
+    dom.dirtySwitchNote.textContent =
+      "当前配置「" + state.configFile + "」有未保存的修改。保存后会自动切换到所选配置。";
+    return new Promise((resolve) => {
+      dirtySwitchResolve = resolve;
+      if (!dom.dirtySwitchDialog.open) dom.dirtySwitchDialog.showModal();
+    });
+  }
+
+  function closeDirtySwitch(choice) {
+    const resolve = dirtySwitchResolve;
+    dirtySwitchResolve = null;
+    if (dom.dirtySwitchDialog.open) dom.dirtySwitchDialog.close();
+    if (resolve) resolve(choice);
+  }
+
+  function restoreConfigSelect() {
+    if (state.configBrowser && state.info) {
+      dom.configSelect.value = BROWSER_OPTION_PREFIX + browserConfigKey(state.info.path);
+    } else {
+      dom.configSelect.value = state.configFile || "";
+    }
+    updateConfigUI();
+  }
+
+  async function switchConfigFromSelect() {
+    const value = dom.configSelect.value;
+    if (value.startsWith(BROWSER_OPTION_PREFIX)) {
+      await switchToBrowserConfig(value.slice(BROWSER_OPTION_PREFIX.length));
+      return;
+    }
+    const file = value;
+    if (!file || file === state.configFile) {
+      updateConfigUI();
       return;
     }
     const item = state.configList.find((c) => c.file === file);
-    if (item && item.error) {
-      showConfigError("该配置读取失败：" + item.error);
+    if (!item) {
+      restoreConfigSelect();
       return;
+    }
+    if (item.error) {
+      showToast("该配置读取失败：" + item.error, { error: true, duration: 6000 });
+      restoreConfigSelect();
+      return;
+    }
+    if (state.configDirty) {
+      const choice = await askSaveBeforeSwitch();
+      if (choice === "cancel") {
+        restoreConfigSelect();
+        return;
+      }
+      if (choice === "save" && !(await persistConfig(state.configFile))) {
+        restoreConfigSelect();
+        return;
+      }
+      dom.configSelect.value = file;
     }
     const total = totalSelectionCount();
-    if (total && !window.confirm("加载配置会替换当前地图上的 " + total + " 个选区，继续吗？")) {
+    if (total && !window.confirm("加载「" + file + "」会替换地图上的 " + total + " 个选区，继续吗？")) {
+      restoreConfigSelect();
       return;
     }
-    dom.configError.hidden = true;
     setConfigBusy(true);
     try {
       const { res, parsed } = await loadConfigFile(file);
-      dom.configDialog.close();
       showToast(
         "已加载「" + res.file + "」 · " + totalSelectionCount() + " 个选区" +
           (parsed.extras.length ? " · 保留 " + parsed.extras.length + " 条非区域项" : ""),
         { duration: 5200 }
       );
     } catch (err) {
-      showConfigError(err.message || "加载配置失败");
+      showToast(err.message || "加载配置失败", { error: true, duration: 6000 });
+      restoreConfigSelect();
     } finally {
       setConfigBusy(false);
-      updateConfigHint();
     }
+  }
+
+  async function switchToBrowserConfig(key) {
+    const entry = browserConfigEntries().find((item) => item.key === key);
+    if (!entry) {
+      showToast("该浏览器配置已不存在", { error: true, duration: 5000 });
+      restoreConfigSelect();
+      return;
+    }
+    if (state.configBrowser && state.info && browserConfigKey(state.info.path) === key) {
+      updateConfigUI();
+      return;
+    }
+    if (state.configDirty) {
+      const choice = await askSaveBeforeSwitch();
+      if (choice === "cancel") {
+        restoreConfigSelect();
+        return;
+      }
+      if (choice === "save" && !(await persistConfig(state.configFile))) {
+        restoreConfigSelect();
+        return;
+      }
+      if (choice !== "save") {
+        state.configDirty = false;
+        clearDraft();
+      }
+      dom.configSelect.value = BROWSER_OPTION_PREFIX + key;
+    }
+    if (state.info && sameWorldPath(entry.path, state.info.path)) {
+      bindBrowserConfig(state.info);
+      return;
+    }
+    setConfigBusy(true);
+    try {
+      const info = await api("/api/world", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: entry.path }),
+      });
+      if (!isWorldInfo(info)) throw new Error("服务返回的存档数据无效");
+      applyWorld(info);
+      bindBrowserConfig(info);
+    } catch (err) {
+      showToast("无法打开该浏览器配置对应的存档：" + (err.message || "未知错误"), {
+        error: true,
+        duration: 6500,
+      });
+      restoreConfigSelect();
+    } finally {
+      setConfigBusy(false);
+    }
+  }
+
+  function normalizePathInput(value) {
+    let text = String(value || "").trim();
+    if (
+      text.length > 1 &&
+      (text[0] === '"' || text[0] === "'") &&
+      text[text.length - 1] === text[0]
+    ) {
+      text = text.slice(1, -1).trim();
+    }
+    return text.replace(/\\/g, "/");
+  }
+
+  function sameWorldPath(a, b) {
+    const norm = (value) =>
+      String(value || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    return !!a && !!b && norm(a) === norm(b);
+  }
+
+  function browserConfigKey(path) {
+    return String(path || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  }
+
+  function browserConfigStore() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(LS_BROWSER_CONFIGS) || "{}");
+      return raw && typeof raw === "object" ? raw : {};
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function readBrowserConfig(path) {
+    const key = browserConfigKey(path);
+    if (!key) return null;
+    const record = browserConfigStore()[key];
+    return record && typeof record === "object" ? record : null;
+  }
+
+  function persistBrowserConfig() {
+    if (!state.configBrowser || !state.info) return;
+    const key = browserConfigKey(state.info.path);
+    if (!key) return;
+    const store = browserConfigStore();
+    store[key] = {
+      savedAt: Date.now(),
+      worldPath: state.info.path,
+      worldName: state.info.name || "",
+      configData: state.configData,
+      configExtras: state.configExtras || [],
+      ignores: state.ignores || [],
+      ignoreExtras: state.ignoreExtras || [],
+    };
+    try {
+      localStorage.setItem(LS_BROWSER_CONFIGS, JSON.stringify(store));
+    } catch (err) {
+      /* storage may be unavailable */
+    }
+  }
+
+  function removeBrowserConfig(path) {
+    const key = browserConfigKey(path);
+    if (!key) return;
+    const store = browserConfigStore();
+    if (!(key in store)) return;
+    delete store[key];
+    try {
+      localStorage.setItem(LS_BROWSER_CONFIGS, JSON.stringify(store));
+    } catch (err) {
+      /* ignore */
+    }
+  }
+
+  function findConfigForWorld(path) {
+    const candidates = state.configList.filter(
+      (item) => !item.error && item.savePath && sameWorldPath(item.savePath, path)
+    );
+    if (!candidates.length) return null;
+    return candidates.find((item) => item.file === state.lastConfigFile) || candidates[0];
+  }
+
+  function browserConfigLabel() {
+    return deriveConfigName().replace(/\.json$/i, "");
+  }
+
+  function browserConfigEntries() {
+    const store = browserConfigStore();
+    return Object.keys(store)
+      .map((key) => {
+        const record = store[key] && typeof store[key] === "object" ? store[key] : {};
+        const path = typeof record.worldPath === "string" && record.worldPath ? record.worldPath : key;
+        return {
+          key,
+          path,
+          name: configNameFromWorld(path, record.worldName),
+          savedAt: Number(record.savedAt) || 0,
+        };
+      })
+      .sort((a, b) => b.savedAt - a.savedAt);
+  }
+
+  function bindBrowserConfig(info) {
+    const stored = readBrowserConfig(info.path);
+    state.configFile = "";
+    state.configBrowser = true;
+    state.configData =
+      stored && stored.configData && typeof stored.configData === "object"
+        ? stored.configData
+        : null;
+    state.configExtras = stored && Array.isArray(stored.configExtras) ? stored.configExtras : [];
+    state.ignoreExtras = stored && Array.isArray(stored.ignoreExtras) ? stored.ignoreExtras : [];
+    state.ignores = normalizeIgnores(
+      stored && Array.isArray(stored.ignores) ? stored.ignores : []
+    );
+    state.configDirty = false;
+    state.configWorldPath = info.path;
+    state.lastConfigBrowser = true;
+    saveSettings();
+    persistBrowserConfig();
+    renderConfigPicker();
+    renderIgnores();
+    updateExport();
+    showToast(
+      stored
+        ? "已恢复仅浏览器配置「" + browserConfigLabel() + "」"
+        : "未找到匹配的配置文件，已创建仅浏览器配置「" + browserConfigLabel() + "」",
+      { duration: 5400 }
+    );
+  }
+
+  function instanceNameFromPath(path) {
+    const parts = String(path || "").replace(/\\/g, "/").split("/").filter(Boolean);
+    const saves = parts.length - 2;
+    if (saves < 0 || parts[saves].toLowerCase() !== "saves") return "";
+    const owner = parts[saves - 1] || "";
+    if (!owner) return "";
+    if (owner.toLowerCase() === ".minecraft") {
+      const instance = parts[saves - 2] || "";
+      const container = (parts[saves - 3] || "").toLowerCase();
+      return container === "instances" ? instance : "";
+    }
+    if ((parts[saves - 2] || "").toLowerCase() === "versions") return "";
+    return owner;
+  }
+
+  function configNameFromWorld(path, worldName) {
+    const world =
+      String(worldName || "").trim() ||
+      String(path || "").replace(/\\/g, "/").split("/").filter(Boolean).pop() ||
+      "存档";
+    const instance = instanceNameFromPath(path);
+    const base = (instance ? instance + "_" : "") + world;
+    const clean = base
+      .replace(/[\\/:*?"<>|]+/g, "_")
+      .replace(/[. ]+$/, "")
+      .slice(0, 110);
+    return clean || "备份配置";
+  }
+
+  function deriveConfigName() {
+    const info = state.info || {};
+    return configNameFromWorld(info.path, info.name) + ".json";
+  }
+
+  function saveTargetName() {
+    const name = deriveConfigName();
+    const existing = state.configList.find(
+      (c) => c.file.toLowerCase() === name.toLowerCase()
+    );
+    if (
+      existing &&
+      existing.savePath &&
+      state.info &&
+      !sameWorldPath(existing.savePath, state.info.path) &&
+      !window.confirm(
+        "「" + existing.file + "」属于另一个存档（" + existing.savePath + "），覆盖它吗？"
+      )
+    ) {
+      return "";
+    }
+    return name;
+  }
+
+  async function persistConfig(target) {
+    setConfigBusy(true);
+    try {
+      const { res, count } = await saveConfigTo(target);
+      await refreshConfigList();
+      updateConfigUI();
+      const backupNote = res.backupFile ? "；原文件已备份为 " + res.backupFile : "";
+      const ignoreNote = state.ignores.length ? " · " + state.ignores.length + " 个排除项" : "";
+      showToast(
+        "已保存「" + res.file + "」 · " + count + " 条选区" + ignoreNote + backupNote,
+        { duration: 5200 }
+      );
+      return true;
+    } catch (err) {
+      showToast(err.message || "保存配置失败", { error: true, duration: 6000 });
+      return false;
+    } finally {
+      setConfigBusy(false);
+    }
+  }
+
+  async function saveCurrentConfig() {
+    if (!state.info) {
+      showToast("请先打开存档", { error: true });
+      return;
+    }
+    const target = state.configFile || saveTargetName();
+    if (!target) return;
+    await persistConfig(target);
   }
 
   async function saveConfigTo(file) {
@@ -4032,9 +4639,12 @@
     });
     state.configData = cfg;
     state.configFile = res.file;
+    state.configBrowser = false;
     state.configDirty = false;
     state.configWorldPath = state.info.path;
     state.lastConfigFile = res.file;
+    state.lastConfigBrowser = false;
+    removeBrowserConfig(state.info.path);
     saveSettings();
     updateExport();
     clearDraft();
@@ -4043,36 +4653,6 @@
       res,
       count: cfg.partials.length - (state.configExtras || []).length + activityCount,
     };
-  }
-
-  async function saveConfigFromDialog(event) {
-    event.preventDefault();
-    if (!state.info) {
-      showConfigError("请先加载存档");
-      return;
-    }
-    const file = dom.configNewName.value.trim() || dom.configSelect.value;
-    if (!file) {
-      showConfigError("请选择已有配置，或在下面输入一个新文件名");
-      return;
-    }
-    dom.configError.hidden = true;
-    setConfigBusy(true);
-    try {
-      const { res, count } = await saveConfigTo(file);
-      dom.configDialog.close();
-      const backupNote = res.backupFile ? "；原文件已备份为 " + res.backupFile : "";
-      const ignoreNote = state.ignores.length ? " · " + state.ignores.length + " 个排除项" : "";
-      showToast(
-        "已保存「" + res.file + "」 · " + count + " 条选区" + ignoreNote + backupNote,
-        { duration: 6000 }
-      );
-    } catch (err) {
-      showConfigError(err.message || "保存配置失败");
-    } finally {
-      setConfigBusy(false);
-      updateConfigHint();
-    }
   }
 
   // ---------------------------------------------------------------- backup
@@ -4091,9 +4671,13 @@
     dom.btnBackupStart.textContent = dirty ? "保存并开始备份" : "开始备份";
   }
 
+  function backupConfigLabel() {
+    return state.configFile || browserConfigLabel() + " · 仅浏览器";
+  }
+
   function renderBackupSummary(items, coverage) {
     dom.backupSummary.replaceChildren();
-    addBackupRow("配置文件", state.configFile);
+    addBackupRow("配置文件", backupConfigLabel());
     addBackupRow("存档", (state.info.name || "存档") + " · " + state.info.path);
     addBackupRow(
       "选区",
@@ -4153,7 +4737,8 @@
     state.backupCoverage = coverage;
     state.backupItems = items;
     dom.backupTitle.textContent = "开始备份";
-    dom.backupSub.textContent = state.configFile + (state.configDirty ? " · 有未保存修改" : "");
+    dom.backupSub.textContent =
+      backupConfigLabel() + (state.configDirty ? " · 有未保存修改" : "");
     dom.backupSummary.hidden = false;
     dom.backupNoteWrap.hidden = false;
     dom.backupNote.disabled = false;
@@ -4170,11 +4755,12 @@
     dom.btnBackupQuickSave.disabled = false;
     dom.btnBackupQuickSave.textContent = "立即保存";
     dom.btnBackupClose.textContent = "取消";
+    dom.btnBackupRevealZip.hidden = true;
     dom.btnBackupCopyZip.hidden = true;
     updateBackupSavePrompt();
   }
 
-  function openBackupDialog() {
+  async function openBackupDialog() {
     if (!state.info) {
       showToast("请先加载存档", { error: true });
       return;
@@ -4187,11 +4773,6 @@
     }
     if (!totalSelectionCount()) {
       showToast("先框选至少一个区块", { error: true });
-      return;
-    }
-    if (!state.configFile) {
-      showToast("先保存备份配置，然后即可开始备份");
-      openConfigDialog(true);
       return;
     }
     dom.backupNote.value = "";
@@ -4207,6 +4788,7 @@
     dom.btnBackupQuickSave.textContent = "保存中…";
     try {
       await saveConfigTo(state.configFile);
+      await refreshConfigList();
       updateBackupSavePrompt();
       dom.backupSub.textContent = state.configFile;
       dom.backupError.hidden = true;
@@ -4223,17 +4805,13 @@
 
   async function startBackup() {
     if (!state.info) return;
-    if (!state.configFile) {
-      openConfigDialog(true);
-      return;
-    }
     dom.backupError.hidden = true;
     dom.btnBackupStart.disabled = true;
     dom.btnBackupStart.textContent = "正在准备…";
     try {
       if (state.configDirty) await saveConfigTo(state.configFile);
       dom.backupTitle.textContent = "正在备份";
-      dom.backupSub.textContent = state.configFile;
+      dom.backupSub.textContent = backupConfigLabel();
       const note = dom.backupNote.value.trim();
       dom.backupSummary.hidden = true;
       dom.backupNoteWrap.hidden = true;
@@ -4246,16 +4824,23 @@
       dom.backupLog.textContent = "正在启动备份进程…";
       dom.btnBackupClose.textContent = "后台运行";
       dom.btnBackupStart.hidden = true;
+      dom.btnBackupRevealZip.hidden = true;
       dom.btnBackupCopyZip.hidden = true;
+      const payload = {
+        chunk_only: state.chunkOnlyBackup,
+        note,
+        extra_partials: buildActivityPartials(),
+      };
+      if (state.configFile) {
+        payload.file = state.configFile;
+      } else {
+        payload.config = buildConfigPayload();
+        payload.name = backupConfigLabel();
+      }
       const data = await api("/api/backup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          file: state.configFile,
-          chunk_only: state.chunkOnlyBackup,
-          note,
-          extra_partials: buildActivityPartials(),
-        }),
+        body: JSON.stringify(payload),
       });
       if (!data.job) throw new Error("服务没有返回备份任务");
       state.backupJob = data.job;
@@ -4299,6 +4884,7 @@
       const elapsed = Math.max(0, Math.round(Date.now() / 1000 - job.started));
       dom.backupStatus.textContent = "正在复制并打包… 已用 " + elapsed + " 秒";
       dom.btnBackupStart.hidden = true;
+      dom.btnBackupRevealZip.hidden = true;
       dom.btnBackupCopyZip.hidden = true;
       dom.btnBackupClose.textContent = "后台运行";
       return;
@@ -4320,6 +4906,7 @@
     }
     if (job.started && job.finished) addBackupRow("用时", formatDuration(job.finished - job.started));
     dom.btnBackupStart.hidden = true;
+    dom.btnBackupRevealZip.hidden = !ok;
     dom.btnBackupCopyZip.hidden = !ok;
     dom.btnBackupClose.textContent = "关闭";
   }
@@ -4397,6 +4984,21 @@
     if (!job || !job.zipPath) return;
     const ok = await copyText(job.zipPath);
     showToast(ok ? "zip 路径已复制" : "复制失败，请手动选择路径", { error: !ok });
+  }
+
+  async function revealBackupZip() {
+    const job = state.backupJob;
+    if (!job || !job.zipPath) return;
+    try {
+      await api("/api/backup/reveal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      showToast("已在文件夹中定位备份文件");
+    } catch (err) {
+      showToast(err.message || "无法打开备份位置", { error: true });
+    }
   }
 
   // ---------------------------------------------------------------- canvas
@@ -5251,6 +5853,7 @@
     dom.canvas.classList.toggle("select-mode", !pan);
     dom.canvas.classList.toggle("pan-mode", pan);
     dom.canvas.classList.toggle("grabbing", !!state.drag && state.drag.type === "pan");
+    dom.canvas.classList.toggle("erasing", !!state.drag && state.drag.type === "erase");
   }
 
   function zoomBy(factor) {
@@ -5301,8 +5904,57 @@
     state.hover = { x: world.x, z: world.z };
   }
 
+  function onRightPointerDown(event) {
+    if (!state.info || !currentDim()) return;
+    hideSelectionMenu();
+    hideActivityTip();
+    event.preventDefault();
+    lastEraseAt = performance.now();
+    if (event.altKey) return;
+    if (!eraseTipSeen()) {
+      markEraseTipSeen();
+      openRightDragTip();
+      return;
+    }
+    const rect = dom.canvas.getBoundingClientRect();
+    const px = clamp(event.clientX - rect.left, 0, cssW);
+    const py = clamp(event.clientY - rect.top, 0, cssH);
+    const world = screenToWorld(px, py);
+    if (selectionUnit() !== CHUNK) {
+      const hit = hitSelectionForDelete(world);
+      if (hit) showZoomHint(hit);
+      return;
+    }
+    if (!hitSelectionForDelete(world)) return;
+    const drag = {
+      type: "erase",
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      lastWorld: world,
+      snapshot: eraseSnapshot(currentDim()),
+      changed: false,
+      removed: 0,
+      discarded: 0,
+    };
+    state.drag = drag;
+    try {
+      dom.canvas.setPointerCapture(event.pointerId);
+    } catch (err) {
+      /* pointer capture is best-effort */
+    }
+    applyEraseMove(drag, world);
+    updateHoverFromScreen(px, py);
+    updateHud();
+    updateCanvasCursor();
+  }
+
   function onPointerDown(event) {
     if (!currentDim()) return;
+    if (event.button === 2) {
+      onRightPointerDown(event);
+      return;
+    }
     if (event.button !== 0 && event.button !== 1) return;
     hideSelectionMenu();
     hideActivityTip();
@@ -5366,6 +6018,15 @@
         updateHoverFromScreen(px, py);
         updateHud();
         requestDraw();
+      } else if (drag.type === "erase") {
+        if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 4) {
+          drag.moved = true;
+        }
+        applyEraseMove(drag, screenToWorld(px, py));
+        updateEraseTip(event, drag);
+        updateHoverFromScreen(px, py);
+        updateHud();
+        requestDraw();
       } else {
         drag.currentWorld = screenToWorld(px, py);
         if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 4) {
@@ -5409,7 +6070,9 @@
     dom.dragTip.hidden = true;
     hideActivityTip();
     updateCanvasCursor();
-    if (!cancelled) {
+    if (drag.type === "erase") {
+      finishEraseDrag(drag);
+    } else if (!cancelled) {
       if (drag.type === "select") {
         if (drag.moved) {
           const bounds = computeDragBounds(drag.startWorld, drag.currentWorld);
@@ -5432,9 +6095,11 @@
   }
 
   function cancelDrag() {
-    if (!state.drag) return;
+    const drag = state.drag;
+    if (!drag) return;
     state.drag = null;
     dom.dragTip.hidden = true;
+    if (drag.type === "erase") finishEraseDrag(drag);
     updateCanvasCursor();
     requestDraw();
   }
@@ -5542,6 +6207,22 @@
       "\n" +
       (active ? "追加到「" + active.desc + "」" : "松开后新建选区");
     dom.dragTip.hidden = false;
+    placeDragTip(event);
+  }
+
+  function updateEraseTip(event, drag) {
+    const parts = [];
+    if (drag.removed) parts.push("删除 " + drag.removed + " 个区块");
+    if (drag.discarded) parts.push("标记可抛弃 " + drag.discarded + " 个");
+    dom.dragTip.textContent = parts.length
+      ? parts.join("\n") + "\n松开右键结束"
+      : "按住右键拖拽可连续删除";
+    dom.dragTip.classList.add("erasing");
+    dom.dragTip.hidden = false;
+    placeDragTip(event);
+  }
+
+  function placeDragTip(event) {
     const rect = dom.stage.getBoundingClientRect();
     const left = event.clientX - rect.left;
     const top = event.clientY - rect.top;

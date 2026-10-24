@@ -367,8 +367,18 @@ def scan_dim_activity(wd, dim, min_seconds=0):
     }
 
 
+def normalize_path_input(value):
+    """Return a user-supplied path in POSIX form (accepts \\, quotes, padding)."""
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    while len(text) > 1 and text[0] in "\"'" and text[-1] == text[0]:
+        text = text[1:-1].strip()
+    return text.replace("\\", "/")
+
+
 def build_world(path_str):
-    p = Path(os.path.expanduser(path_str.strip().strip('"').strip("'"))).resolve()
+    p = Path(os.path.expanduser(normalize_path_input(path_str))).resolve()
     if not p.is_dir():
         raise ValueError("文件夹不存在")
     level_file = p / "level.dat"
@@ -378,6 +388,9 @@ def build_world(path_str):
     name = p.name
     version = ""
     data_version = None
+    game_type = None
+    hardcore = False
+    allow_commands = False
     last_played = None
     # Minecraft rewrites level.dat while saving; retry a few times instead of
     # showing blank version info when the file was caught mid-write.
@@ -393,6 +406,10 @@ def build_world(path_str):
                     version = ver["Name"]
                 if isinstance(data.get("DataVersion"), int):
                     data_version = data["DataVersion"]
+                if isinstance(data.get("GameType"), int):
+                    game_type = data["GameType"]
+                hardcore = bool(data.get("hardcore"))
+                allow_commands = bool(data.get("allowCommands"))
                 last_played = data.get("LastPlayed")
             break
         except Exception:
@@ -476,6 +493,9 @@ def build_world(path_str):
         "name": name,
         "version": version,
         "dataVersion": data_version,
+        "gameType": game_type,
+        "hardcore": hardcore,
+        "allowCommands": allow_commands,
         "lastPlayedMs": last_played_ms,
         "hasIcon": has_icon,
         "iconMtime": icon_mtime,
@@ -676,9 +696,22 @@ def config_path(name, must_exist=False):
 
 
 def read_config_file(path):
-    cfg = json.loads(path.read_text(encoding="utf-8-sig"))
+    text = path.read_text(encoding="utf-8-sig")
+    try:
+        cfg = json.loads(text)
+    except json.JSONDecodeError as exc:
+        # Hand-written configs often paste a Windows path with lone
+        # backslashes, which are invalid JSON escapes. Retry with them
+        # turned into separators.
+        repaired = text.replace("\\\\", "/").replace("\\", "/")
+        try:
+            cfg = json.loads(repaired)
+        except json.JSONDecodeError:
+            raise exc
     if not isinstance(cfg, dict):
         raise ValueError("配置必须是 JSON 对象")
+    if isinstance(cfg.get("save_path"), str):
+        cfg["save_path"] = normalize_path_input(cfg["save_path"])
     return cfg
 
 
@@ -762,6 +795,8 @@ def validate_config(cfg):
     save_path = cfg.get("save_path")
     if not isinstance(save_path, str) or not save_path.strip():
         raise ValueError("配置的 save_path 无效")
+    save_path = normalize_path_input(save_path)
+    cfg["save_path"] = save_path
     ignores = cfg.get("ignores", [])
     if not isinstance(ignores, list):
         raise ValueError("ignores 必须是数组")
@@ -790,6 +825,8 @@ def validate_config(cfg):
 
 def save_config_file(path, cfg):
     CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
+    if isinstance(cfg.get("save_path"), str):
+        cfg["save_path"] = normalize_path_input(cfg["save_path"])
     backup_name = None
     if path.is_file():
         bak = path.with_name(path.name + ".bak")
@@ -924,10 +961,17 @@ def normalize_extra_partials(value):
     return items
 
 
-def start_backup(path, chunk_only=False, note="", extra_partials=None):
+def start_backup(path=None, chunk_only=False, note="", extra_partials=None, config=None, name=None):
     global BACKUP_JOB
     note = note.strip()[:40] if isinstance(note, str) else ""
-    cfg = read_config_file(path)
+    if config is not None:
+        cfg = validate_config(config)
+        display_name = (name.strip()[:80] if isinstance(name, str) and name.strip() else "") or "浏览器配置"
+        cfg_path = None
+    else:
+        cfg = read_config_file(path)
+        display_name = path.name
+        cfg_path = path
     save_path = cfg.get("save_path")
     if not isinstance(save_path, str) or not save_path.strip():
         raise ValueError("配置的 save_path 无效")
@@ -935,10 +979,9 @@ def start_backup(path, chunk_only=False, note="", extra_partials=None):
     if not save_path.is_dir():
         raise ValueError("配置中的存档目录不存在")
 
-    cfg_path = path
     temp_cfg = None
     extras = normalize_extra_partials(extra_partials)
-    if extras:
+    if extras or config is not None:
         combined = dict(cfg)
         saved_partials = combined.get("partials")
         combined["partials"] = (saved_partials if isinstance(saved_partials, list) else []) + extras
@@ -958,7 +1001,7 @@ def start_backup(path, chunk_only=False, note="", extra_partials=None):
             raise RuntimeError("已有备份任务正在运行，请等它结束")
         job = {
             "id": time.strftime("%Y%m%d-%H%M%S") + "-" + os.urandom(2).hex(),
-            "file": path.name,
+            "file": display_name,
             "running": True,
             "started": time.time(),
             "finished": None,
@@ -1121,6 +1164,44 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
                 return
 
+            if parsed.path == "/api/pick-folder":
+                raw = data.get("initial")
+                initial = None
+                if isinstance(raw, str) and raw.strip():
+                    p = Path(os.path.expanduser(raw.strip().strip('"')))
+                    if p.is_dir():
+                        initial = p
+                    elif p.parent.is_dir():
+                        initial = p.parent
+                if initial is None:
+                    wd = get_world()
+                    initial = Path(wd.info["path"]).parent if wd is not None else Path.home()
+                self.send_json({"path": pick_folder_dialog(str(initial))})
+                return
+
+            if parsed.path == "/api/open-save-dir":
+                wd = get_world()
+                if wd is None:
+                    raise ValueError("尚未加载存档")
+                folder = Path(wd.info["path"])
+                if not folder.is_dir():
+                    raise ValueError("存档目录不存在")
+                reveal_in_folder(folder)
+                self.send_json({"ok": True, "path": str(folder)})
+                return
+
+            if parsed.path == "/api/backup/reveal":
+                with BACKUP_LOCK:
+                    zip_path = BACKUP_JOB.get("zipPath") if BACKUP_JOB else None
+                if not zip_path:
+                    raise ValueError("还没有可定位的备份文件")
+                target = Path(zip_path)
+                if not target.is_file():
+                    raise ValueError("备份文件不存在")
+                reveal_in_folder(target)
+                self.send_json({"ok": True, "path": str(target)})
+                return
+
             if parsed.path == "/api/world":
                 path = data.get("path")
                 if not isinstance(path, str) or not path.strip():
@@ -1153,13 +1234,22 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if parsed.path == "/api/backup":
-                path = config_path(data.get("file"), must_exist=True)
-                job = start_backup(
-                    path,
-                    bool(data.get("chunk_only")),
-                    data.get("note") or "",
-                    data.get("extra_partials"),
-                )
+                if data.get("config") is not None:
+                    job = start_backup(
+                        chunk_only=bool(data.get("chunk_only")),
+                        note=data.get("note") or "",
+                        extra_partials=data.get("extra_partials"),
+                        config=data.get("config"),
+                        name=data.get("name"),
+                    )
+                else:
+                    path = config_path(data.get("file"), must_exist=True)
+                    job = start_backup(
+                        path,
+                        bool(data.get("chunk_only")),
+                        data.get("note") or "",
+                        data.get("extra_partials"),
+                    )
                 self.send_json({"job": job})
                 return
 
@@ -1261,6 +1351,56 @@ def find_port(start, strict=False):
             except OSError:
                 continue
     raise RuntimeError(f"从 {start} 起连续 30 个端口都不可用")
+
+
+PICK_LOCK = threading.Lock()
+
+
+def pick_folder_dialog(initial=None):
+    """打开系统文件夹选择框，返回所选目录；取消时返回空字符串。"""
+    if sys.platform != "win32":
+        raise RuntimeError("当前系统不支持系统文件夹选择框，请手动填写路径")
+    if not PICK_LOCK.acquire(blocking=False):
+        raise RuntimeError("已经有一个文件夹选择窗口打开了")
+    root = None
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        kwargs = {
+            "parent": root,
+            "title": "选择包含 level.dat 的存档文件夹",
+            "mustexist": True,
+        }
+        if initial:
+            try:
+                if Path(initial).is_dir():
+                    kwargs["initialdir"] = str(initial)
+            except OSError:
+                pass
+        return filedialog.askdirectory(**kwargs) or ""
+    except Exception as e:
+        raise RuntimeError(f"文件夹选择窗口打开失败：{e}")
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+        PICK_LOCK.release()
+
+
+def reveal_in_folder(path):
+    target = str(path)
+    if sys.platform == "win32":
+        subprocess.Popen(["explorer", "/select," + target])
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", target])
+    else:
+        subprocess.Popen(["xdg-open", str(Path(target).parent)])
 
 
 def init_worker():

@@ -273,12 +273,94 @@ select:focus-visible {
   flex: 1;
 }
 
+.world-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .world-name {
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: 14px;
   font-weight: 650;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.world-tags[hidden] {
+  display: none;
+}
+
+.world-tags {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.world-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.world-tag.version {
+  font-family: var(--mono);
+  font-weight: 500;
+  letter-spacing: 0;
+  color: #93a3b8;
+}
+
+.world-tag.mode-survival {
+  color: #8fdf9f;
+  border-color: rgba(120, 214, 150, 0.38);
+  background: rgba(74, 189, 110, 0.13);
+}
+
+.world-tag.mode-creative {
+  color: #9ccdff;
+  border-color: rgba(120, 175, 255, 0.38);
+  background: rgba(84, 148, 255, 0.13);
+}
+
+.world-tag.mode-adventure {
+  color: #f2bb7d;
+  border-color: rgba(240, 179, 107, 0.38);
+  background: rgba(240, 179, 107, 0.13);
+}
+
+.world-tag.mode-spectator {
+  color: #b3bdcb;
+  border-color: rgba(179, 189, 203, 0.32);
+  background: rgba(179, 189, 203, 0.1);
+}
+
+.world-tag.hardcore {
+  color: #3a2703;
+  border-color: rgba(255, 224, 138, 0.9);
+  background: linear-gradient(135deg, #ffe9a3 0%, #f3c54b 45%, #d69b12 100%);
+  box-shadow: 0 0 0 1px rgba(214, 155, 18, 0.3), 0 0 8px rgba(243, 197, 75, 0.25);
+  font-weight: 750;
+}
+
+.world-tag.cheats {
+  color: #ff9d9d;
+  border-color: rgba(255, 130, 130, 0.4);
+  background: rgba(255, 96, 96, 0.12);
 }
 
 .world-sub {
@@ -295,6 +377,15 @@ select:focus-visible {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: color 0.15s;
+}
+
+.world-path.loaded {
+  cursor: pointer;
+}
+
+.world-path.loaded:hover {
+  color: #8fa2b8;
 }
 
 .world-meta {
@@ -693,49 +784,50 @@ select:focus-visible {
   line-height: 1.55;
 }
 
+.config-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.config-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: #070b10;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  cursor: pointer;
+  outline: none;
+}
+
+.config-select:focus {
+  border-color: rgba(74, 222, 159, 0.5);
+}
+
+.config-select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.config-select.dirty {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.4);
+}
+
+.config-select.local {
+  color: #93c5fd;
+  border-color: rgba(147, 197, 253, 0.35);
+}
+
 .config-buttons {
   display: flex;
   flex-shrink: 0;
   align-items: center;
   gap: 4px;
-}
-
-.config-strip {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
-  padding: 7px 8px;
-  border: 1px dashed rgba(255, 255, 255, 0.1);
-  border-radius: 9px;
-  background: rgba(0, 0, 0, 0.16);
-}
-
-.config-meta {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.config-caption {
-  color: var(--muted-2);
-  font-size: 9.5px;
-  letter-spacing: 0.06em;
-}
-
-.config-name {
-  max-width: 200px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: #c5d1df;
-  font-size: 11.5px;
-}
-
-.config-name.dirty {
-  color: #fbbf24;
 }
 
 .ignore-block {
@@ -1071,6 +1163,10 @@ code {
 
 #map.grabbing {
   cursor: grabbing !important;
+}
+
+#map.erasing {
+  cursor: crosshair !important;
 }
 
 .toolbar {
@@ -1425,6 +1521,11 @@ code {
   transform: translate(14px, 14px);
 }
 
+.drag-tip.erasing {
+  border-color: rgba(248, 113, 113, 0.5);
+  color: #fecaca;
+}
+
 .drag-tip.flip-x {
   transform: translate(calc(-100% - 14px), 14px);
 }
@@ -1638,6 +1739,21 @@ code {
   box-shadow: 0 0 0 3px rgba(74, 222, 159, 0.08);
 }
 
+.path-row {
+  display: flex;
+  gap: 8px;
+}
+
+.path-row .path-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.path-row .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .dialog-tip {
   margin: 7px 0 0;
   color: var(--muted-2);
@@ -1654,33 +1770,41 @@ code {
   font-size: 11.5px;
 }
 
+.right-drag-dialog {
+  width: min(560px, calc(100vw - 40px));
+}
+
+.right-drag-points {
+  margin: 0;
+  padding-left: 18px;
+  color: #a9b7c9;
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+.right-drag-points li + li {
+  margin-top: 4px;
+}
+
+.right-drag-dialog .dialog-tip {
+  line-height: 1.7;
+}
+
+.right-drag-dialog code {
+  padding: 1px 5px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.05);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: #c7d5e6;
+}
+
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 16px;
-}
-
-.config-dialog {
-  width: min(620px, calc(100vw - 40px));
-}
-
-.config-select {
-  font-family: var(--mono);
-  font-size: 11.5px;
-  cursor: pointer;
-}
-
-.config-save-field {
-  margin-top: 16px;
-}
-
-.config-dialog .dialog-tip {
-  line-height: 1.55;
-}
-
-.config-actions {
-  flex-wrap: wrap;
 }
 
 .backup-dialog {
@@ -2154,7 +2278,9 @@ label,
 .ignore-pick,
 .context-menu,
 .toast,
-.world-dialog {
+.world-dialog,
+.world-tags,
+.world-path {
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
