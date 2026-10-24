@@ -11,6 +11,15 @@
 
 ---
 
+## 界面预览
+
+![网页选区工具界面：左侧是存档信息、维度与选区列表，右侧是按区域渲染的地图](./screenshot.png)
+
+左侧依次是存档概况（维度 / 区域 / 数据量）、维度切换、选区列表（含「活跃区块」）与配置文件、排除项；
+右侧地图按区域文件渲染地形，可框选区块、悬停查看区块活动时长、显示 Xaero 路径点，选好后可直接备份。
+
+---
+
 ## 环境要求
 
 - **Python 3**（仅需标准库，**无需 `pip install` 任何第三方包**；`http.server`、`pathlib`、`gzip`、`struct` 等自 3.7 起可用。开发与测试环境为 Python 3.15）。
@@ -230,6 +239,7 @@ python server.py            # 可选：--world "路径" --port 8787 --no-browser
 ├─ backup_runner.py         # 实际执行裁剪/打包（网页工具的“备份”按钮也调用它）
 ├─ global_config.json       # 语言、config 读取路径等全局设置
 ├─ requirements.txt         # 依赖说明（本项目仅需 Python 标准库）
+├─ screenshot.png           # 界面预览图（文档用）
 ├─ configs/                 # 备份配置（内含模板与说明；个人配置默认不纳入版本控制）
 └─ map_selector/            # 网页选区工具
    ├─ start_map.bat         # 本工具的启动入口
