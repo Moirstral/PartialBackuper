@@ -1,6 +1,15 @@
 (() => {
   "use strict";
 
+  const SESSION_ID =
+    (crypto.randomUUID && crypto.randomUUID()) ||
+    (Date.now().toString(36) + Math.random().toString(36).slice(2));
+  const SERVICE_PORT = location.port || (location.protocol === "https:" ? "443" : "80");
+
+  // 尽早注册一次心跳。刷新时旧页面会先上报关闭，若等到 init() 里的 await
+  // 走完才发心跳，看门狗可能已按 1 秒宽限期把服务关掉。
+  fetch("/api/health?sid=" + encodeURIComponent(SESSION_ID), { cache: "no-store" }).catch(() => {});
+
   const REGION = 512;
   const CHUNK = 16;
   const CHUNK_ZOOM = 0.8;
@@ -28,6 +37,7 @@
     stage: $id("stage"),
     canvas: $id("map"),
     worldIconFallback: $id("worldIconFallback"),
+    serviceStatus: $id("serviceStatus"),
     worldIconImg: $id("worldIconImg"),
     worldName: $id("worldName"),
     worldSub: $id("worldSub"),
@@ -385,10 +395,79 @@
     }
     return data;
   }
+    const STATUS_LABEL = {
+    connecting: "连接中",
+    online: "已连接",
+    offline: "已断开",
+  };
+
+  let reconnectTimer = null;
+
+  function setServiceStatus(state) {
+    const node = dom.serviceStatus;
+    if (!node) return;
+    if (node.dataset.state === state) return;
+    node.dataset.state = state;
+    const label = node.querySelector(".status-label");
+    if (label) label.textContent = STATUS_LABEL[state] || state;
+    node.title =
+      state === "offline" ? "服务未运行，点击尝试启动后端"
+      : state === "connecting" ? "正在连接服务"
+      : "服务运行正常";
+  }
+
+  async function probeHealth() {
+    try {
+      const res = await fetch(
+        "/api/health?sid=" + encodeURIComponent(SESSION_ID),
+        { cache: "no-store" }
+      );
+      return res.ok;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  async function heartbeat() {
+    if (reconnectTimer) return; // 重连轮询中，不重复打
+    setServiceStatus((await probeHealth()) ? "online" : "offline");
+  }
+
+  function launchBackend() {
+    if (reconnectTimer) return;
+    setServiceStatus("connecting");
+    try {
+      window.location.href =
+        "mcbackup://backend?port=" + encodeURIComponent(SERVICE_PORT);
+    } catch (err) {}
+
+    let attempts = 0;
+    reconnectTimer = setInterval(async () => {
+      attempts += 1;
+      if (await probeHealth()) {
+        clearInterval(reconnectTimer);
+        reconnectTimer = null;
+        setServiceStatus("online");
+        return;
+      }
+      if (attempts > 20) { // 约 30 秒
+        clearInterval(reconnectTimer);
+        reconnectTimer = null;
+        setServiceStatus("offline");
+      }
+    }, 1500);
+  }
 
   // ---------------------------------------------------------------- boot
 
   async function init() {
+    // Setup PWA
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/sw.js").catch(() => {});
+      });
+    }
+
     ctx = dom.canvas.getContext("2d");
     loadSettings();
     applySettingsToUI();
@@ -410,6 +489,20 @@
 
     requestDraw();
     loadBackupStatus();
+
+    // 心跳：首次立即探测 + 每 5 秒一次，同时驱动状态指示器
+    heartbeat();
+    setInterval(heartbeat, 5000);
+
+    // 从后台切回前台时立刻刷新一次状态
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") heartbeat();
+    });
+
+    // 已断开时点击状态指示器，尝试拉起后端
+    dom.serviceStatus.addEventListener("click", () => {
+      if (dom.serviceStatus.dataset.state === "offline") launchBackend();
+    });
   }
 
   async function autoLoadPreferredConfig() {
@@ -708,6 +801,25 @@
       cacheDraft();
       event.preventDefault();
       event.returnValue = "";
+    });
+    window.addEventListener("pagehide", (event) => {
+      if (event.persisted) return;
+      const body = JSON.stringify({ sid: SESSION_ID });
+      // 停服依赖这条“页面关闭上报”，卸载阶段 sendBeacon 比 fetch(keepalive) 更可靠
+      try {
+        if (navigator.sendBeacon) {
+          const blob = new Blob([body], { type: "application/json" });
+          if (navigator.sendBeacon("/api/shutdown", blob)) return;
+        }
+      } catch (err) {}
+      try {
+        fetch("/api/shutdown", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+          keepalive: true,
+        }).catch(() => {});
+      } catch (err) {}
     });
     dom.btnBackup.addEventListener("click", openBackupDialog);
     dom.btnBackupStart.addEventListener("click", startBackup);
@@ -3460,14 +3572,19 @@
     dom.exportPreview.value = JSON.stringify(buildConfigPayload(), null, 2);
     const items = buildBackupPartials();
     if (!items.length) {
-      dom.exportStats.textContent = "全部维度暂无选区；仍可预览或保存配置。";
+      dom.exportStats.textContent = "暂无选区；仍可预览或保存配置。";
       return;
     }
     const coverage = partialsCoverage(items);
     dom.exportStats.textContent =
-      "全部维度 " +
       items.length +
-      " 条选区 · 覆盖 " +
+      " 选区 · " +
+      coverage.existing +
+      " 区块 · 约 " +
+      formatBytes(coverage.bytes);
+    dom.exportStats.title =
+      items.length +
+      " 个选区 · 覆盖 " +
       coverage.chunks +
       " 个区块（" +
       coverage.existing +

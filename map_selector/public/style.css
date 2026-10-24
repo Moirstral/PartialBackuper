@@ -121,6 +121,83 @@ select:focus-visible {
   font-size: 11.5px;
 }
 
+.brand-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.brand-title-row h1 {
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.service-status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px 1px 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.6;
+  white-space: nowrap;
+  cursor: default;
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+.service-status[data-state="connecting"] {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.25);
+  background: rgba(251, 191, 36, 0.08);
+}
+.service-status[data-state="connecting"] .status-dot {
+  animation: status-pulse 1.4s ease-in-out infinite;
+}
+
+.service-status[data-state="online"] {
+  color: var(--accent);
+  border-color: rgba(74, 222, 159, 0.25);
+  background: rgba(74, 222, 159, 0.08);
+}
+.service-status[data-state="online"] .status-dot {
+  box-shadow: 0 0 6px rgba(74, 222, 159, 0.6);
+}
+
+.service-status[data-state="offline"] {
+  color: var(--danger);
+  border-color: rgba(248, 113, 113, 0.25);
+  background: rgba(248, 113, 113, 0.08);
+  cursor: pointer;
+}
+.service-status[data-state="offline"]:hover {
+  background: rgba(248, 113, 113, 0.16);
+  border-color: rgba(248, 113, 113, 0.45);
+}
+.service-status[data-state="offline"] .status-dot {
+  animation: status-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.85); }
+}
+
 .panel {
   background: linear-gradient(180deg, rgba(20, 27, 38, 0.86), rgba(14, 19, 27, 0.9));
   border: 1px solid var(--border);
@@ -2039,5 +2116,59 @@ code {
   .new-sel-btn {
     padding-left: 8px;
     padding-right: 8px;
+  }
+}
+
+/* ---------- PWA 窗口拖动 ---------- */
+/* 左侧栏设为拖动区 */
+.sidebar,
+.main {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+/* 地图框无法拖动 */
+.stage {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* 所有交互控件本身不参与拖动 */
+button,
+input,
+select,
+textarea,
+a,
+label,
+[contenteditable],
+[role="button"],
+[role="menuitem"] {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* 侧栏内整块可点击 / 可滚动的容器，整块排除 */
+.sel-card,
+.dim-tab,
+.sel-list,
+.ignore-pick,
+.context-menu,
+.toast,
+.world-dialog {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+::window-controls-overlay {
+  background: transparent; /* 让叠加层背景透明 */
+  color: white; /* 设置按钮图标为白色 */
+}
+
+@media all and (display-mode: window-controls-overlay) {
+  .main {
+    padding: 34px 12px 12px 0;
+  }
+  body {
+    background: radial-gradient(900px 700px at 8% 110%, rgba(56, 189, 248, 0.045), transparent 60%), var(--bg);
   }
 }

@@ -27,3 +27,4 @@ configs/*
 
 # --- Unfinished experiment, not ready to publish ---
 map_selector_static/
+map_selector/app.lnk

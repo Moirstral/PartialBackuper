@@ -467,6 +467,8 @@ EXACT = {
     "magma_block": (150, 60, 20), "grass_block": (106, 156, 62), "short_grass": (100, 150, 60),
     "grass": (100, 150, 60), "tall_grass": (100, 150, 60), "fern": (95, 145, 58),
     "large_fern": (95, 145, 58), "dead_bush": (140, 110, 55), "vine": (70, 110, 50),
+    "brown_mushroom_block": (150, 108, 77), "red_mushroom_block": (200, 60, 50),
+    "mushroom_stem": (196, 190, 178), "brown_mushroom": (140, 105, 75),"red_mushroom": (200, 55, 50),
     "moss_block": (80, 120, 50), "moss_carpet": (80, 120, 50), "pale_moss_block": (140, 150, 120),
     "pale_hanging_moss": (150, 160, 130), "hanging_roots": (120, 100, 80),
     "big_dripleaf": (90, 140, 60), "small_dripleaf": (100, 150, 70), "lily_pad": (60, 120, 50),
@@ -503,8 +505,10 @@ EXACT = {
     "blue_ice": (116, 167, 253), "frosted_ice": (170, 200, 240), "glass": (185, 210, 220),
     "glass_pane": (185, 210, 220), "tinted_glass": (70, 65, 80), "glowstone": (255, 220, 130),
     "sea_lantern": (220, 240, 235), "redstone_lamp": (160, 100, 55), "jack_o_lantern": (220, 150, 50),
-    "lantern": (230, 180, 90), "soul_lantern": (100, 190, 200), "torch": (255, 200, 80),
-    "soul_torch": (90, 200, 210), "campfire": (190, 120, 50), "soul_campfire": (80, 160, 170),
+    "lantern": (230, 180, 90), "soul_lantern": (100, 190, 200), 
+    "torch": (255, 200, 80), "wall_torch": (255, 200, 80),
+    "soul_torch": (90, 200, 210), "soul_wall_torch": (90, 200, 210),
+    "campfire": (190, 120, 50), "soul_campfire": (80, 160, 170),
     "iron_block": (220, 220, 220), "gold_block": (247, 213, 74), "diamond_block": (98, 219, 214),
     "emerald_block": (43, 190, 100), "redstone_block": (175, 24, 5), "lapis_block": (30, 67, 140),
     "coal_block": (30, 30, 30), "quartz_block": (235, 229, 222), "smooth_quartz": (237, 231, 224),
@@ -523,7 +527,7 @@ EXACT = {
     "note_block": (130, 95, 70), "jukebox": (130, 95, 70), "target": (225, 215, 190),
     "lever": (120, 110, 90), "rail": (140, 140, 140), "powered_rail": (160, 130, 90),
     "detector_rail": (140, 120, 100), "activator_rail": (150, 100, 80),
-    "redstone_wire": (170, 30, 30), "redstone_torch": (180, 40, 40),
+    "redstone_wire": (170, 30, 30), "redstone_torch": (180, 40, 40), "redstone_wall_torch": (180, 40, 40),
     "repeater": (150, 140, 130), "comparator": (150, 140, 130),
     "daylight_detector": (120, 110, 90), "wheat": (190, 170, 80), "carrots": (90, 130, 50),
     "potatoes": (110, 150, 60), "beetroots": (120, 60, 60), "melon": (120, 160, 50),
@@ -534,13 +538,68 @@ EXACT = {
     "tall_seagrass": (60, 140, 80), "sponge": (190, 180, 100), "wet_sponge": (160, 170, 80),
     "honey_block": (230, 170, 50), "slime_block": (110, 190, 100), "sculk": (25, 45, 50),
     "sculk_catalyst": (30, 55, 60), "sculk_sensor": (20, 60, 65), "sculk_vein": (30, 60, 65),
+    "clay": (160, 165, 175), "cobweb": (225, 230, 235),
+    "prismarine": (95, 160, 150), "prismarine_bricks": (100, 165, 155),
+    "dark_prismarine": (50, 105, 95),
+    "crafter": (150, 115, 80), "trial_spawner": (60, 55, 60),
+    "vault": (130, 100, 70), "heavy_core": (65, 60, 70),
+    "copper_bulb": (200, 120, 90), "copper_grate": (190, 110, 85),
+    "chiseled_copper": (185, 105, 80),
+    "creaking_heart": (95, 80, 65), "tuff_bricks": (100, 100, 95),
+    "resin_block": (215, 130, 40), "resin_brick": (200, 120, 50),
+    # 建筑/装饰
+    "bricks": (150, 80, 60), "mud_bricks": (100, 80, 60), "packed_mud": (140, 110, 75),
+    "cut_red_sandstone": (175, 95, 35), "chiseled_red_sandstone": (170, 90, 32),
+    "smooth_red_sandstone": (180, 100, 40),
+    "ladder": (145, 110, 65), "iron_bars": (150, 150, 155), "chain": (80, 80, 90),
+    "lightning_rod": (190, 105, 80), "scaffolding": (195, 170, 100),
+    "cauldron": (60, 60, 65), "composter": (130, 95, 60),
+    "lectern": (150, 115, 75), "loom": (145, 110, 70),
+    "cartography_table": (120, 90, 60), "fletching_table": (180, 155, 100),
+    "smithing_table": (75, 75, 85), "stonecutter": (125, 120, 115),
+    "grindstone": (130, 125, 120), "brewing_stand": (185, 165, 135),
+    "cake": (235, 220, 200),
+    # 末地/下界
+    "end_rod": (230, 225, 215), "end_portal_frame": (75, 115, 95),
+    "soul_fire": (100, 200, 220),
+    "chiseled_polished_blackstone": (50, 44, 48),
+    "polished_blackstone_bricks": (45, 40, 44),
+    "cracked_polished_blackstone_bricks": (40, 36, 40),
+    # 紫水晶/滴水石
+    "amethyst_cluster": (160, 120, 210), "budding_amethyst": (140, 105, 195),
+    "small_amethyst_bud": (155, 115, 200),
+    "medium_amethyst_bud": (155, 115, 200),
+    "large_amethyst_bud": (158, 118, 205),
+    "pointed_dripstone": (145, 115, 100),
 }
 
 MINERALS = {
     "coal": (45, 45, 45), "iron": (190, 160, 130), "copper": (200, 120, 80),
     "gold": (240, 200, 70), "redstone": (180, 30, 30), "lapis": (40, 80, 160),
     "diamond": (100, 220, 215), "emerald": (50, 200, 110), "quartz": (230, 225, 215),
-    "ancient_debris": (90, 60, 55),
+    "ancient_debris": (90, 60, 55), "nether_quartz": (230, 225, 215),
+    "nether_gold": (240, 200, 70), 
+}
+
+PLANTS = {
+    # 单格花
+    "dandelion": (200, 190, 30), "poppy": (200, 50, 45),
+    "blue_orchid": (50, 140, 200), "allium": (170, 90, 190),
+    "azure_bluet": (220, 220, 200), "red_tulip": (200, 55, 50),
+    "orange_tulip": (220, 130, 40), "white_tulip": (230, 230, 225),
+    "pink_tulip": (225, 145, 180), "oxeye_daisy": (235, 235, 220),
+    "cornflower": (70, 90, 200), "lily_of_the_valley": (235, 240, 230),
+    "wither_rose": (35, 30, 30), "torchflower": (245, 160, 60),
+    # 双格花
+    "sunflower": (240, 200, 40), "lilac": (200, 150, 200),
+    "rose_bush": (190, 45, 55), "peony": (225, 170, 200),
+    "pitcher_plant": (100, 130, 180),
+    # 其他植物
+    "pink_petals": (230, 165, 195), "spore_blossom": (215, 110, 160),
+    "glow_lichen": (140, 175, 155), "cave_vines": (120, 155, 90),
+    "cave_vines_plant": (110, 145, 85), "sea_pickle": (100, 130, 60),
+    "crimson_roots": (140, 25, 45), "warped_roots": (30, 120, 110),
+    "nether_sprouts": (30, 130, 120),
 }
 
 COLOR_CACHE = {}
@@ -596,10 +655,14 @@ def compute_color(full_name):
     base = base_name(full_name)
     if not base or base in ("air", "cave_air", "void_air"):
         return None
+    if base.startswith("waxed_"):
+        return compute_color(base[6:])
     if base in EXACT:
         return EXACT[base]
     if base in LEAVES:
         return LEAVES[base]
+    if base in PLANTS:
+        return PLANTS[base]
 
     if PLANK_RE.search(base):
         for key, c in WOOD.items():
@@ -676,6 +739,10 @@ def compute_color(full_name):
                 return scale(c, 0.95)
         if b in EXACT:
             return EXACT[b]
+        if b + "s" in EXACT:
+            return EXACT[b + "s"]
+        if b == "iron":
+            return 190, 190, 195
         return 130, 105, 75
 
     if STAIR_RE.search(base):
@@ -693,6 +760,8 @@ def compute_color(full_name):
                 return c
         if b.endswith("_bricks") and b in EXACT:
             return EXACT[b]
+        if b + "s" in EXACT:
+            return EXACT[b + "s"]
 
     if base.startswith("potted_"):
         return compute_color(base[7:]) or (130, 100, 70)

@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>服务未启动 · MC存档选区备份工具</title>
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    .sidebar {
+      z-index: 9999;
+      position: fixed;
+    }
+
+    .offline-main {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .offline-card {
+      width: min(420px, 100%);
+      padding: 28px 26px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      background: linear-gradient(180deg, rgba(20, 27, 38, 0.9), rgba(14, 19, 27, 0.94));
+      text-align: center;
+    }
+
+    .offline-card h2 {
+      margin: 0 0 8px;
+      font-size: 17px;
+      font-weight: 650;
+    }
+
+    .offline-card p {
+      margin: 0 0 20px;
+      color: var(--muted);
+      font-size: 12.5px;
+      line-height: 1.7;
+    }
+
+    .offline-card .btn.primary { width: 100%; }
+
+    .offline-status {
+      margin: 12px 0 0;
+      color: var(--accent-soft);
+      font-size: 11.5px;
+      min-height: 16px;
+    }
+
+    .offline-hint {
+      margin: 10px 0 0;
+      color: var(--muted-2);
+      font-size: 11px;
+      line-height: 1.6;
+    }
+
+    /* 品牌栏和主内容空白区可拖动 */
+    .sidebar,
+    .offline-main {
+      -webkit-app-region: drag;
+      app-region: drag;
+    }
+
+    /* 卡片整块不可拖：按钮、状态、代码全在里面 */
+    .offline-card {
+      -webkit-app-region: no-drag;
+      app-region: no-drag;
+    }
+
+    /* 代码块允许选中复制 */
+    .offline-card code {
+      -webkit-user-select: text;
+      user-select: text;
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <header class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+          <path d="M12 2.8 20 7v10l-8 4.2L4 17V7l8-4.2Z" />
+          <path d="M4 7l8 4.2L20 7M12 11.2V21" />
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1>MC存档选区备份工具</h1>
+        <p>可视化框选区块 · 生成备份配置</p>
+      </div>
+    </header>
+  </aside>
+  <main class="offline-main">
+    <div class="offline-card">
+      <h2>服务未启动</h2>
+      <p>本工具需要本地 Python 服务才能使用。<br>请启动服务，或点击下方按钮。</p>
+      <button class="btn primary" id="launch" type="button">启动服务</button>
+      <div class="offline-status" id="status"></div>
+      <p class="offline-hint">如果按钮无反应，可能是未注册服务<br>请手动运行 <code>start_map.bat --no-browser</code>，<br>或在终端执行 <code>python server.py --no-browser</code>。</p>
+    </div>
+  </main>
+</div>
+<script>
+  const btn = document.getElementById("launch");
+  const status = document.getElementById("status");
+  let pollTimer = null;
+
+  // PWA 安装时绑定的端口；http 默认 80，https 默认 443
+  const PORT = location.port || (location.protocol === "https:" ? "443" : "80");
+
+  async function probe() {
+    try {
+      const res = await fetch("/api/health", { cache: "no-store" });
+      return res.ok;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function startPolling() {
+    if (pollTimer) return;
+    let attempts = 0;
+    pollTimer = setInterval(async () => {
+      attempts += 1;
+      if (await probe()) {
+        clearInterval(pollTimer);
+        status.textContent = "服务已启动，正在进入…";
+        setTimeout(() => location.reload(), 400);
+      } else if (attempts > 40) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        status.textContent = "未检测到服务，是否未安装服务？";
+        btn.disabled = false;
+      }
+    }, 1500);
+  }
+
+  btn.addEventListener("click", () => {
+    btn.disabled = true;
+    status.textContent = "正在启动（端口 " + PORT + "）…";
+    try {
+      window.location.href = "mcbackup://backend?port=" + encodeURIComponent(PORT);
+    } catch (e) {}
+    startPolling();
+    setTimeout(() => {
+      if (pollTimer && status.textContent === "正在启动（端口 " + PORT + "）…") {
+        status.textContent = "未收到启动信号，请手动运行 start_map.bat。";
+        btn.disabled = false;
+      }
+    }, 5000);
+  });
+
+  probe().then((ok) => {
+    if (ok) {
+      status.textContent = "服务已启动，正在进入…";
+      setTimeout(() => location.reload(), 300);
+    }
+  });
+</script>
+</body>
+</html>
