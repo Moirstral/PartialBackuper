@@ -173,7 +173,7 @@
       </div>
 
       <div class="toolbar toolbar-right">
-        <button class="tool-btn icon" id="btnRightDragHelp" type="button" title="右键拖拽删除区块与鼠标手势说明">?</button>
+        <button class="tool-btn icon" id="btnRightDragHelp" type="button" title="右键框选删除区块与鼠标手势说明">?</button>
         <button class="tool-btn" id="btnFit" type="button" title="适配视图 (F)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
             <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3" />
@@ -195,9 +195,9 @@
       </div>
 
       <div class="map-help">
-        <div><strong>左键拖拽</strong> 新建/追加选区 · <strong>中键 / 空格</strong> 平移 · <strong>滚轮</strong> 缩放</div>
+        <div><strong>左键拖拽</strong> 新建/追加选区 · <strong>右键&拖拽</strong> 取消选区</div>
         <div class="muted">放大到 <strong>80%</strong> 以上按 <strong>16×16 区块</strong> 框选，缩小时按 <strong>512×512 区域</strong> 框选</div>
-        <div class="muted"><strong>右键单击</strong> 删除区块，<strong>按住右键拖拽</strong> 连续删除（活动选区中为标记可抛弃）· <strong>Alt + 右键</strong> 编辑/删除选区 · <strong>Ctrl + 拖拽</strong> 追加到指定选区 · <strong>Esc</strong> 结束当前选区</div>
+        <div class="muted"><strong>Alt + 右键</strong> 打开菜单 · <strong>Esc</strong> 结束当前选区 · <strong>左键单击</strong> 选中选区 · <strong>中键 / 空格</strong> 平移 · <strong>滚轮</strong> 缩放</div>
       </div>
 
       <div class="render-badge" id="renderBadge" hidden>
@@ -333,7 +333,7 @@
       <p class="dialog-tip">按 <strong>20 游戏刻 = 1 秒</strong>换算为现实时间；0 表示只要停留过就算。每个维度单独设置，切换维度后这里的数值会跟着变。修改后重新扫描会直接更新当前维度的活动选区，不会新建。</p>
     </div>
     <div class="backup-summary" id="activitySummary"></div>
-    <p class="backup-warning">生成后，放大到 <strong>80%</strong> 以上右键单击或拖拽区块，可把它标记为可抛弃并从选区移除。标记会保留，下次扫描不会再加回来。活动选区不能改名、不能手动追加，只能移除区块或删除整个选区。</p>
+    <p class="backup-warning">生成后，放大到 <strong>80%</strong> 以上右键单击或拖拽区块，可把它标记为可抛弃。标记的区块正中间会显示红叉，仍留在活动选区里，再次右键即可恢复；标记只在备份时排除，重新扫描时不会丢失。活动选区不能改名、不能手动追加。</p>
     <p class="dialog-tip" id="activityDiscardHint" hidden></p>
     <div class="backup-progress" id="activityProgress" hidden>
       <span class="spinner"></span>
@@ -463,13 +463,14 @@
         </svg>
       </div>
       <div>
-        <h2>右键拖拽删除区块</h2>
-        <p>放大到 80% 以上后，右键单击删除一个区块，按住右键拖拽可连续删除</p>
+        <h2>右键框选删除区块</h2>
+        <p>放大到 80% 以上后，右键单击删除一个区块，按住右键拖拽框选，松开后删除框内的区块；只作用于当前选区（卡片上标有「当前」）</p>
       </div>
     </div>
     <ul class="right-drag-points">
-      <li>普通选区里的区块会从选区中移除；活动选区里则标记为可抛弃，下次扫描不会再加回来。</li>
-      <li>拖拽会出现在鼠标旁边显示已删除的区块数，松开后可以点「撤销」整批恢复。</li>
+      <li>只删除当前选区里的区块，不会影响其他选区；活跃选区没有设为当前时也不会被改动。</li>
+      <li>在活动选区里右键改为标记可抛弃：区块正中间显示红叉并留在选区里，再次右键即可恢复；标记只在备份时排除。</li>
+      <li>拖拽时鼠标旁会显示红色框和将要删除或标记的区块数，松开右键才会生效；之后可以点「撤销」整批恢复。</li>
       <li>如果右键拖拽触发了鼠标手势（例如页面后退、关闭标签页），可能是 Edge 自带的鼠标手势，也可能装了鼠标手势扩展。</li>
     </ul>
     <p class="dialog-tip">

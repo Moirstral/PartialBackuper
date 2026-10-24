@@ -23,6 +23,7 @@
   const LS_DISCARDS = "mc-map-discard-v1";
   const LS_RIGHT_DRAG_TIP = "mc-map-right-drag-tip-v1";
   const ACTIVITY_COLOR = "#f59e0b";
+  const ACTIVITY_DISCARD_COLOR = "#ef4444";
 
   const DIM_COLORS = {
     "minecraft:overworld": "#4ade9f",
@@ -1824,6 +1825,90 @@
 
   const activityTimeCache = new WeakMap();
 
+  let discardRevision = 0;
+  let discardKeyCache = { dimId: "", rev: -1, set: new Set() };
+  let activityDrawCache = { dimId: "", sel: null, rev: -1, cells: [] };
+  let activityBackupCache = { dimId: "", sel: null, rev: -1, parts: null };
+
+  function discardKeySet(dimId) {
+    if (discardKeyCache.dimId === dimId && discardKeyCache.rev === discardRevision) {
+      return discardKeyCache.set;
+    }
+    const set = new Set(discardKeys(dimId));
+    discardKeyCache = { dimId, rev: discardRevision, set };
+    return set;
+  }
+
+  function activityDiscardCells(dim, sel) {
+    if (
+      activityDrawCache.dimId === dim.id &&
+      activityDrawCache.sel === sel &&
+      activityDrawCache.rev === discardRevision
+    ) {
+      return activityDrawCache.cells;
+    }
+    const cells = [];
+    const chunks = sel && sel.activity && Array.isArray(sel.activity.chunks)
+      ? sel.activity.chunks
+      : null;
+    const marks = discardKeySet(dim.id);
+    if (chunks && marks.size) {
+      for (const item of chunks) {
+        if (marks.has(item[0] + "," + item[1])) cells.push([item[0], item[1]]);
+      }
+    }
+    activityDrawCache = { dimId: dim.id, sel, rev: discardRevision, cells };
+    return cells;
+  }
+
+  function buildActivityBackupParts(dim, sel) {
+    const chunks = sel.activity && Array.isArray(sel.activity.chunks)
+      ? sel.activity.chunks
+      : null;
+    if (!chunks) return getParts(sel);
+    const marks = discardKeySet(dim.id);
+    const rows = new Map();
+    for (const item of chunks) {
+      if (marks.has(item[0] + "," + item[1])) continue;
+      let xs = rows.get(item[1]);
+      if (!xs) rows.set(item[1], (xs = []));
+      xs.push(item[0]);
+    }
+    const parts = [];
+    for (const [cz, xs] of rows) {
+      xs.sort((a, b) => a - b);
+      let start = xs[0];
+      let prev = xs[0];
+      for (let i = 1; i <= xs.length; i += 1) {
+        const cx = xs[i];
+        if (cx !== prev + 1) {
+          parts.push({
+            x1: start * CHUNK,
+            z1: cz * CHUNK,
+            x2: prev * CHUNK + CHUNK - 1,
+            z2: cz * CHUNK + CHUNK - 1,
+          });
+          start = cx;
+        }
+        prev = cx;
+      }
+    }
+    return parts;
+  }
+
+  function activityBackupParts(dim, sel) {
+    if (
+      activityBackupCache.dimId === dim.id &&
+      activityBackupCache.sel === sel &&
+      activityBackupCache.rev === discardRevision
+    ) {
+      return activityBackupCache.parts;
+    }
+    const parts = buildActivityBackupParts(dim, sel);
+    activityBackupCache = { dimId: dim.id, sel, rev: discardRevision, parts };
+    return parts;
+  }
+
   function activityChunkTime(sel, cx, cz) {
     if (!sel || !sel.activity) return null;
     let map = activityTimeCache.get(sel);
@@ -2069,7 +2154,7 @@
       dom.activeBadgeLead.textContent = special ? "活动选区" : "正在添加到";
       dom.activeBadgeName.textContent = sel.desc || "选区";
       dom.activeBadgeHint.textContent = special
-        ? "右键拖拽区块标记可抛弃 · 左键拖拽会新建普通选区"
+        ? "右键框选区块标记排除 · 左键拖拽会新建普通选区"
         : "继续拖拽追加";
     }
   }
@@ -2083,7 +2168,7 @@
     if (notify && sel) {
       showToast(
         sel.special === "activity"
-          ? "活动选区「" + sel.desc + "」· 放大后右键拖拽区块可标记为可抛弃 · 左键拖拽会新建普通选区"
+          ? "活动选区「" + sel.desc + "」· 放大后右键框选区块可标记为排除 · 左键拖拽会新建普通选区"
           : "正在添加到「" + sel.desc + "」· 继续拖拽即可追加区块",
         { duration: 5600 }
       );
@@ -2261,7 +2346,7 @@
   function openEditDialog(sel) {
     if (!sel) return;
     if (sel.special === "activity") {
-      showToast("活跃区块不能改名；右键单击或拖拽区块可标记为可抛弃，或直接删除整个选区", { duration: 5200 });
+      showToast("活跃区块不能改名；右键单击或拖拽区块可标记为排除，或直接删除整个选区", { duration: 5200 });
       return;
     }
     state.editingSelId = sel.id;
@@ -2487,8 +2572,8 @@
     const percent = Math.round(CHUNK_ZOOM * 100) + "%";
     showToast(
       hit.special === "activity"
-        ? "放大到 " + percent + " 以上后，右键单击/拖拽可把区块标记为可抛弃"
-        : "放大到 " + percent + " 以上后，右键单击/拖拽可删除区块",
+        ? "放大到 " + percent + " 以上后，右键单击或框选可把区块标记为排除"
+        : "放大到 " + percent + " 以上后，右键单击或框选可删除区块",
       { duration: 4600 }
     );
   }
@@ -2531,59 +2616,32 @@
     requestDraw();
   }
 
-  function discardChunkSilent(sel, world) {
+  function refreshAfterDiscard() {
+    renderSelections();
+    updateExport();
+    requestDraw();
+  }
+
+  function toggleDiscardChunkSilent(sel, world) {
     const dim = currentDim();
     if (!dim) return null;
-    const list = state.selections[dim.id] || [];
-    const index = list.findIndex((item) => item.id === sel.id);
-    if (index < 0) return null;
     const cx = Math.floor(world.x / CHUNK);
     const cz = Math.floor(world.z / CHUNK);
     const key = cx + "," + cz;
-    if (discardKeys(dim.id).includes(key)) return null;
-    const cut = {
-      x1: cx * CHUNK,
-      z1: cz * CHUNK,
-      x2: cx * CHUNK + CHUNK - 1,
-      z2: cz * CHUNK + CHUNK - 1,
-    };
-    const nextParts = subtractRectFromParts(getParts(sel), cut);
-    let activityUpdate = null;
-    if (sel.activity) {
-      const remaining = sel.activity.chunks.filter(
-        (item) => !(item[0] === cx && item[1] === cz)
-      );
-      if (remaining.length) activityUpdate = { chunks: remaining };
-    }
-    let removedSelection = false;
-    if (!nextParts.length) {
-      list.splice(index, 1);
-      removedSelection = true;
-    } else {
-      const updated = normalizeSelection({
-        id: sel.id,
-        desc: sel.desc,
-        special: "activity",
-        parts: nextParts,
-        activity: activityUpdate,
-      });
-      if (!updated) return null;
-      list[index] = updated;
+    if (discardKeys(dim.id).includes(key)) {
+      removeDiscardKeys(dim.id, [key]);
+      return { kind: "restored", sel, cx, cz };
     }
     addDiscardKey(dim.id, key);
-    if (removedSelection && state.activeSelId === sel.id) {
-      state.activeSelId = "";
-      updateActiveUI();
-    }
-    return { kind: "discarded", sel, cx, cz, removedSelection };
+    return { kind: "discarded", sel, cx, cz };
   }
 
   function eraseChunkSilent(world) {
     const dim = currentDim();
     if (!dim) return null;
-    const sel = hitSelectionForDelete(world);
-    if (!sel) return null;
-    if (sel.special === "activity") return discardChunkSilent(sel, world);
+    const sel = findActiveSelection();
+    if (!sel || !selectionContains(sel, world)) return null;
+    if (sel.special === "activity") return toggleDiscardChunkSilent(sel, world);
     const list = state.selections[dim.id] || [];
     const index = list.findIndex((item) => item.id === sel.id);
     if (index < 0) return null;
@@ -2615,19 +2673,21 @@
   function eraseClickMessage(result) {
     const coord = "X " + result.cx * CHUNK + " · Z " + result.cz * CHUNK;
     if (result.kind === "discarded") {
-      return result.removedSelection
-        ? "已把区块 " + coord + " 标记为可抛弃，活动选区已移除"
-        : "已把区块 " + coord + " 标记为可抛弃，并从「" + result.sel.desc + "」移除";
+      return "已把区块 " + coord + " 标记为排除 · 再次右键可恢复";
+    }
+    if (result.kind === "restored") {
+      return "已恢复区块 " + coord + " 的备份";
     }
     return result.removedSelection
       ? "已删除「" + result.sel.desc + "」的最后一个区块，选区已移除"
       : "已从「" + result.sel.desc + "」删除区块 " + coord;
   }
 
-  function eraseDragMessage(drag) {
+  function eraseRangeMessage(result) {
     const parts = [];
-    if (drag.removed) parts.push("已删除 " + drag.removed + " 个区块");
-    if (drag.discarded) parts.push("已标记 " + drag.discarded + " 个区块为可抛弃");
+    if (result.removed) parts.push("已删除 " + result.removed + " 个区块");
+    if (result.discarded) parts.push("已标记 " + result.discarded + " 个活动区块为排除");
+    if (result.restored) parts.push("已恢复 " + result.restored + " 个活动区块");
     return parts.join("，");
   }
 
@@ -2635,14 +2695,27 @@
     const dim = currentDim();
     if (!dim) return;
     if (selectionUnit() !== CHUNK) {
-      const hit = hitSelectionForDelete(world);
+      const active = findActiveSelection();
+      const hit = active && selectionContains(active, world) ? active : hitSelection(world);
       if (hit) showZoomHint(hit);
+      return;
+    }
+    const active = findActiveSelection();
+    if (!active) {
+      showToast("右键删除只作用于当前选区 · 请先左键点击或 Alt+右键设为一个选区", {
+        duration: 5200,
+      });
+      return;
+    }
+    if (!selectionContains(active, world)) {
+      showToast("这个位置不在当前选区「" + active.desc + "」内", { duration: 4200 });
       return;
     }
     const snap = eraseSnapshot(dim);
     const result = eraseChunkSilent(world);
     if (!result) return;
-    refreshAfterErase();
+    if (active.special === "activity") refreshAfterDiscard();
+    else refreshAfterErase();
     showToast(eraseClickMessage(result), {
       action: "撤销",
       duration: 7000,
@@ -2650,48 +2723,120 @@
     });
   }
 
-  function applyEraseMove(drag, world) {
-    const dx = world.x - drag.lastWorld.x;
-    const dz = world.z - drag.lastWorld.z;
-    const steps = Math.max(
-      1,
-      Math.ceil(Math.max(Math.abs(dx), Math.abs(dz)) / (CHUNK / 2))
-    );
-    let changed = false;
-    for (let i = 1; i <= steps; i += 1) {
-      const point = {
-        x: drag.lastWorld.x + (dx * i) / steps,
-        z: drag.lastWorld.z + (dz * i) / steps,
-      };
-      const result = eraseChunkSilent(point);
-      if (!result) continue;
-      changed = true;
-      if (result.kind === "discarded") drag.discarded += 1;
-      else drag.removed += 1;
-      drag.lastResult = result;
-    }
-    drag.lastWorld = world;
-    if (changed) {
-      drag.changed = true;
-      refreshAfterErase();
-    }
+  function chunkRectFromBounds(bounds) {
+    const cx1 = Math.floor(bounds.x1 / CHUNK);
+    const cx2 = Math.floor(bounds.x2 / CHUNK);
+    const cz1 = Math.floor(bounds.z1 / CHUNK);
+    const cz2 = Math.floor(bounds.z2 / CHUNK);
+    return {
+      x1: cx1 * CHUNK,
+      z1: cz1 * CHUNK,
+      x2: (cx2 + 1) * CHUNK - 1,
+      z2: (cz2 + 1) * CHUNK - 1,
+    };
   }
 
-  function finishEraseDrag(drag) {
+  function eraseTargetsFromRect(rect) {
+    const sel = findActiveSelection();
+    if (!sel) return [];
+    const cells = new Set();
+    for (const part of getParts(sel)) {
+      const ix1 = Math.max(part.x1, rect.x1);
+      const ix2 = Math.min(part.x2, rect.x2);
+      const iz1 = Math.max(part.z1, rect.z1);
+      const iz2 = Math.min(part.z2, rect.z2);
+      if (ix1 > ix2 || iz1 > iz2) continue;
+      const cx1 = Math.floor(ix1 / CHUNK);
+      const cx2 = Math.floor(ix2 / CHUNK);
+      const cz1 = Math.floor(iz1 / CHUNK);
+      const cz2 = Math.floor(iz2 / CHUNK);
+      for (let cx = cx1; cx <= cx2; cx += 1) {
+        for (let cz = cz1; cz <= cz2; cz += 1) cells.add(cx + "," + cz);
+      }
+    }
+    return cells.size ? [{ sel, cells }] : [];
+  }
+
+  function eraseRangeSilent(bounds) {
+    const dim = currentDim();
+    if (!dim) return null;
+    const rect = chunkRectFromBounds(bounds);
+    const targets = eraseTargetsFromRect(rect);
+    if (!targets.length) return null;
+    const targetById = new Map(targets.map((item) => [item.sel.id, item.cells]));
+    const list = state.selections[dim.id] || [];
+    const nextList = [];
+    const removedCells = new Set();
+    const discards = new Set(discardKeys(dim.id));
+    const addedMarks = [];
+    const restoredMarks = [];
+    for (const sel of list) {
+      const cells = targetById.get(sel.id);
+      if (!cells) {
+        nextList.push(sel);
+        continue;
+      }
+      if (sel.special === "activity") {
+        for (const key of cells) {
+          if (discards.has(key)) restoredMarks.push(key);
+          else addedMarks.push(key);
+        }
+        nextList.push(sel);
+        continue;
+      }
+      const nextParts = subtractRectFromParts(getParts(sel), rect);
+      for (const key of cells) removedCells.add(key);
+      if (!nextParts.length) {
+        if (state.activeSelId === sel.id) state.activeSelId = "";
+        continue;
+      }
+      const updated = normalizeSelection({ id: sel.id, desc: sel.desc, parts: nextParts });
+      if (updated) nextList.push(updated);
+      else if (state.activeSelId === sel.id) state.activeSelId = "";
+    }
+    if (!removedCells.size && !addedMarks.length && !restoredMarks.length) return null;
+    state.selections[dim.id] = nextList;
+    if (addedMarks.length) addDiscardKeys(dim.id, addedMarks);
+    if (restoredMarks.length) removeDiscardKeys(dim.id, restoredMarks);
+    updateActiveUI();
+    return {
+      removed: removedCells.size,
+      discarded: addedMarks.length,
+      restored: restoredMarks.length,
+    };
+  }
+
+  function applyEraseDrag(drag) {
     dom.dragTip.classList.remove("erasing");
     lastEraseAt = performance.now();
-    if (!drag.changed) return;
-    const snap = drag.snapshot;
-    const total = drag.removed + drag.discarded;
-    const message =
-      total === 1 && !drag.moved && drag.lastResult
-        ? eraseClickMessage(drag.lastResult)
-        : eraseDragMessage(drag);
-    showToast(message, {
+    if (!drag.moved) {
+      deleteChunkAt(drag.startWorld);
+      return;
+    }
+    const active = findActiveSelection();
+    if (!active) {
+      showToast("右键删除只作用于当前选区 · 请先左键点击或 Alt+右键设为一个选区", {
+        duration: 5200,
+      });
+      return;
+    }
+    const result = eraseRangeSilent(computeDragBounds(drag.startWorld, drag.currentWorld));
+    if (!result) {
+      showToast("框内没有当前选区「" + active.desc + "」的区块", { duration: 3200 });
+      return;
+    }
+    if (active.special === "activity") refreshAfterDiscard();
+    else refreshAfterErase();
+    showToast(eraseRangeMessage(result), {
       action: "撤销",
       duration: 7000,
-      onAction: () => restoreEraseSnapshot(snap),
+      onAction: () => restoreEraseSnapshot(drag.snapshot),
     });
+  }
+
+  function cancelEraseDrag() {
+    dom.dragTip.classList.remove("erasing");
+    lastEraseAt = performance.now();
   }
 
   function focusSelection(sel) {
@@ -2834,7 +2979,14 @@
         const tag = el("span", "sel-special-tag", "活跃");
         tag.title = "悬停地图上的活跃区块可查看该区块时长";
         card.title = tag.title;
-        foot.append(tag, activityBackupToggle(dim.id));
+        foot.append(tag);
+        const marks = activityDiscardCells(dim, sel).length;
+        if (marks) {
+          const discardTag = el("span", "sel-discard-tag", marks + " 排除");
+          discardTag.title = "地图上以红叉标记，备份时排除；再次右键可恢复";
+          foot.append(discardTag);
+        }
+        foot.append(activityBackupToggle(dim.id));
       }
       if (!special && parts.length > 1) {
         foot.append(el("span", "sel-parts", parts.length + " 个选区"));
@@ -2895,6 +3047,7 @@
       /* discard marks are optional */
     }
     state.discardStore = store;
+    discardRevision += 1;
   }
 
   function discardKeys(dimId) {
@@ -2908,21 +3061,49 @@
     for (const [worldPath, dims] of Object.entries(state.discardStore)) {
       if (!dims || !Object.keys(dims).length) delete state.discardStore[worldPath];
     }
+    discardRevision += 1;
     try {
       localStorage.setItem(LS_DISCARDS, JSON.stringify(state.discardStore));
     } catch (err) {
-      showToast("无法保存可抛弃区块标记", { error: true, duration: 4200 });
+      showToast("无法保存排除区块标记", { error: true, duration: 4200 });
     }
   }
 
-  function addDiscardKey(dimId, key) {
-    if (!state.info) return;
+  function addDiscardKeys(dimId, keys) {
+    if (!state.info || !keys.length) return;
     const path = state.info.path;
     if (!state.discardStore[path]) state.discardStore[path] = {};
     const dims = state.discardStore[path];
     if (!dims[dimId]) dims[dimId] = [];
-    if (!dims[dimId].includes(key)) dims[dimId].push(key);
+    const list = dims[dimId];
+    const seen = new Set(list);
+    let changed = false;
+    for (const key of keys) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+      list.push(key);
+      changed = true;
+    }
+    if (changed) saveDiscards();
+  }
+
+  function addDiscardKey(dimId, key) {
+    addDiscardKeys(dimId, [key]);
+  }
+
+  function removeDiscardKeys(dimId, keys) {
+    if (!state.info || !keys.length) return 0;
+    const dims = state.discardStore[state.info.path];
+    const list = dims && dims[dimId];
+    if (!Array.isArray(list)) return 0;
+    const drop = new Set(keys);
+    const next = list.filter((key) => !drop.has(key));
+    const removed = list.length - next.length;
+    if (!removed) return 0;
+    if (next.length) dims[dimId] = next;
+    else delete dims[dimId];
     saveDiscards();
+    return removed;
   }
 
   function clearDiscardKeys(dimId) {
@@ -2931,7 +3112,7 @@
     const list = dims && dims[dimId];
     const count = Array.isArray(list) ? list.length : 0;
     if (dims) delete dims[dimId];
-    saveDiscards();
+    if (count) saveDiscards();
     return count;
   }
 
@@ -2968,7 +3149,7 @@
     } else {
       addActivityRow("现有活动选区", "无");
     }
-    addActivityRow("可抛弃标记", discs + " 个区块");
+    addActivityRow("排除标记", discs + " 个区块");
   }
 
   function openActivityDialog() {
@@ -2991,10 +3172,10 @@
     dom.btnActivityClearDiscard.disabled = false;
     dom.btnActivityStart.textContent = existing ? "重新扫描并更新" : "开始扫描";
     dom.btnActivityClearDiscard.hidden = discs === 0;
-    dom.btnActivityClearDiscard.textContent = "清除可抛弃标记（" + discs + "）";
+    dom.btnActivityClearDiscard.textContent = "清除排除标记（" + discs + "）";
     dom.activityDiscardHint.hidden = discs === 0;
     dom.activityDiscardHint.textContent =
-      "本维度已有 " + discs + " 个可抛弃区块标记，扫描时会自动排除；标记保存在本机浏览器中，重新扫描不会丢失。";
+      "本维度已有 " + discs + " 个排除区块标记，重新扫描仍会保留这些区块，备份时会自动排除；标记保存在本机浏览器中。";
     renderActivitySummary(dim, existing, minSeconds);
     if (!dom.activityDialog.open) dom.activityDialog.showModal();
   }
@@ -3010,34 +3191,13 @@
     renderActivitySummary(dim, existing, parsed);
   }
 
-  function activityRectsFromRegions(regions, discardSet) {
-    const discardsByRegion = new Map();
-    for (const key of discardSet) {
-      const comma = key.indexOf(",");
-      const cx = Number(key.slice(0, comma));
-      const cz = Number(key.slice(comma + 1));
-      if (!Number.isInteger(cx) || !Number.isInteger(cz)) continue;
-      const regionKey = Math.floor(cx / 32) + "," + Math.floor(cz / 32);
-      let list = discardsByRegion.get(regionKey);
-      if (!list) {
-        list = new Set();
-        discardsByRegion.set(regionKey, list);
-      }
-      list.add((cz & 31) * 32 + (cx & 31));
-    }
-
+  function activityRectsFromRegions(regions) {
     const rects = [];
     const times = [];
     let chunks = 0;
     for (const region of regions) {
       const mask = decodeChunkMask(region.mask);
       if (!mask) continue;
-      const dropped = discardsByRegion.get(region.x + "," + region.z);
-      if (dropped) {
-        for (const index of dropped) {
-          mask[index >> 3] &= ~(1 << (index & 7));
-        }
-      }
       for (let i = 0; i < 128; i += 1) chunks += popcount8(mask[i]);
 
       const baseX = region.x * 32;
@@ -3134,10 +3294,23 @@
     }
   }
 
+  function activitySelectionMatches(sel, built) {
+    if (!sel) return false;
+    const chunks = sel.activity && sel.activity.chunks;
+    if (!Array.isArray(chunks) || chunks.length !== built.times.length) return false;
+    const parts = getParts(sel);
+    if (parts.length !== built.rects.length) return false;
+    for (let i = 0; i < parts.length; i += 1) {
+      const a = parts[i];
+      const b = built.rects[i];
+      if (a.x1 !== b.x1 || a.z1 !== b.z1 || a.x2 !== b.x2 || a.z2 !== b.z2) return false;
+    }
+    return true;
+  }
+
   function applyActivityScan(dim, data, options) {
     const silent = !!(options && options.silent);
-    const discarded = new Set(discardKeys(dim.id));
-    const built = activityRectsFromRegions(data.regions, discarded);
+    const built = activityRectsFromRegions(data.regions);
     const minSeconds = Number(data.minSeconds) || 0;
     const filterText = minSeconds > 0 ? "，最小 " + minSeconds + " 秒" : "";
     const unreadable = Number(data.unreadableChunks) || 0;
@@ -3150,6 +3323,23 @@
     const list = state.selections[dim.id] || (state.selections[dim.id] = []);
     const index = list.findIndex((sel) => sel.special === "activity");
     const existing = index >= 0 ? list[index] : null;
+    if (existing && activitySelectionMatches(existing, built)) {
+      if (!silent) {
+        state.activeSelId = existing.id;
+        updateActiveUI();
+        dom.activityDialog.close();
+        showToast(
+          "扫描结果没有变化 · " + built.chunks + " 个活跃区块" + filterText + suffix,
+          { duration: 5200 }
+        );
+        markActivityConfigChangedIfNeeded();
+      } else {
+        showToast("活动选区没有变化 · " + built.chunks + " 个区块" + filterText + suffix, {
+          duration: 4200,
+        });
+      }
+      return;
+    }
     const before = list.slice();
     const beforeActive = state.activeSelId;
     const finishUndo = () => {
@@ -3163,14 +3353,9 @@
     };
 
     if (!built.rects.length) {
-      let reason;
-      if (Number(data.activeChunks) > 0) {
-        reason = "检测到的 " + data.activeChunks + " 个活跃区块都在可抛弃标记里，已全部排除";
-      } else {
-        reason = minSeconds > 0
-          ? "没有活动时间 ≥ " + minSeconds + " 秒的区块"
-          : "没有检测到玩家活动过的区块";
-      }
+      const reason = minSeconds > 0
+        ? "没有活动时间 ≥ " + minSeconds + " 秒的区块"
+        : "没有检测到玩家活动过的区块";
       if (existing) {
         list.splice(index, 1);
         if (state.activeSelId === existing.id) {
@@ -3226,7 +3411,7 @@
     dom.activityDialog.close();
     showToast(
       (existing ? "已更新「" : "已生成「") + updated.desc + "」· " + built.chunks +
-        " 个活跃区块" + filterText + suffix + " · 放大后右键拖拽区块可标记可抛弃",
+        " 个活跃区块" + filterText + suffix + " · 放大后右键框选区块可标记排除",
       {
         action: "撤销",
         duration: 9000,
@@ -3240,10 +3425,11 @@
     const dim = currentDim();
     if (!dim) return;
     const count = clearDiscardKeys(dim.id);
+    refreshAfterDiscard();
     showToast(
       count
-        ? "已清除 " + count + " 个可抛弃标记，重新扫描可恢复这些区块"
-        : "本维度没有可抛弃标记",
+        ? "已清除 " + count + " 个排除标记，这些区块会重新参与备份"
+        : "本维度没有排除标记",
       { duration: 5200 }
     );
     openActivityDialog();
@@ -3252,7 +3438,8 @@
   // ---------------------------------------------------------------- export
 
   function selectionToPartial(dim, sel) {
-    const parts = getParts(sel);
+    const parts = sel.special === "activity" ? activityBackupParts(dim, sel) : getParts(sel);
+    if (!parts.length) return null;
     const item = { folder: dim.folder, desc: sel.desc || "选区" };
     if (parts.length === 1) {
       item.x1 = parts[0].x1;
@@ -3294,7 +3481,8 @@
   function buildActivityPartials() {
     return activitySelections()
       .filter((entry) => activityBackupOn(entry.dim.id))
-      .map((entry) => selectionToPartial(entry.dim, entry.sel));
+      .map((entry) => selectionToPartial(entry.dim, entry.sel))
+      .filter(Boolean);
   }
 
   function buildBackupPartials() {
@@ -5395,6 +5583,33 @@
     }
   }
 
+  function drawActivityDiscards(dim, sel) {
+    if (state.camera.scale < CHUNK_ZOOM) return;
+    const cells = activityDiscardCells(dim, sel);
+    if (!cells.length) return;
+    const size = CHUNK * state.camera.scale;
+    const arm = clamp(size * 0.3, 3, 14);
+    ctx.beginPath();
+    let visible = 0;
+    for (const [cx, cz] of cells) {
+      const x = worldToScreenX(cx * CHUNK) + size / 2;
+      const y = worldToScreenZ(cz * CHUNK) + size / 2;
+      if (x + arm < 0 || y + arm < 0 || x - arm > cssW || y - arm > cssH) continue;
+      ctx.moveTo(x - arm, y - arm);
+      ctx.lineTo(x + arm, y + arm);
+      ctx.moveTo(x + arm, y - arm);
+      ctx.lineTo(x - arm, y + arm);
+      visible += 1;
+    }
+    if (!visible) return;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineWidth = clamp(size * 0.12, 1.5, 3.5);
+    ctx.strokeStyle = hexA(ACTIVITY_DISCARD_COLOR, 0.95);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function drawSelections() {
     const sels = currentSelections();
     // Activity is drawn first so it stays at the bottom and regular
@@ -5402,6 +5617,12 @@
     sels.forEach((sel) => {
       if (sel.special === "activity") drawSelection(sel, 0, ACTIVITY_COLOR);
     });
+    const dim = currentDim();
+    if (dim) {
+      sels.forEach((sel) => {
+        if (sel.special === "activity") drawActivityDiscards(dim, sel);
+      });
+    }
     let number = 0;
     sels.forEach((sel, index) => {
       if (sel.special === "activity") return;
@@ -5652,18 +5873,21 @@
 
   function drawDragPreview() {
     const drag = state.drag;
-    if (!drag || drag.type !== "select" || !drag.moved) return;
-    const b = computeDragBounds(drag.startWorld, drag.currentWorld);
+    if (!drag || !drag.moved) return;
+    const erasing = drag.type === "erase";
+    if (drag.type !== "select" && !erasing) return;
+    const bounds = computeDragBounds(drag.startWorld, drag.currentWorld);
+    const b = erasing ? chunkRectFromBounds(bounds) : bounds;
     const x = worldToScreenX(b.x1);
     const y = worldToScreenZ(b.z1);
     const width = (b.x2 - b.x1 + 1) * state.camera.scale;
     const height = (b.z2 - b.z1 + 1) * state.camera.scale;
-    ctx.fillStyle = "rgba(251,191,36,0.12)";
+    ctx.fillStyle = erasing ? "rgba(248,113,113,0.14)" : "rgba(251,191,36,0.12)";
     ctx.fillRect(x, y, width, height);
     ctx.save();
     ctx.setLineDash([6, 4]);
     ctx.lineWidth = 1.5;
-    ctx.strokeStyle = "rgba(251,191,36,0.95)";
+    ctx.strokeStyle = erasing ? "rgba(248,113,113,0.95)" : "rgba(251,191,36,0.95)";
     ctx.strokeRect(x + 0.75, y + 0.75, Math.max(1, width - 1.5), Math.max(1, height - 1.5));
     ctx.restore();
   }
@@ -5925,17 +6149,15 @@
       if (hit) showZoomHint(hit);
       return;
     }
-    if (!hitSelectionForDelete(world)) return;
     const drag = {
       type: "erase",
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
-      lastWorld: world,
+      startWorld: world,
+      currentWorld: world,
+      moved: false,
       snapshot: eraseSnapshot(currentDim()),
-      changed: false,
-      removed: 0,
-      discarded: 0,
     };
     state.drag = drag;
     try {
@@ -5943,7 +6165,6 @@
     } catch (err) {
       /* pointer capture is best-effort */
     }
-    applyEraseMove(drag, world);
     updateHoverFromScreen(px, py);
     updateHud();
     updateCanvasCursor();
@@ -6019,14 +6240,16 @@
         updateHud();
         requestDraw();
       } else if (drag.type === "erase") {
+        drag.currentWorld = screenToWorld(px, py);
         if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 4) {
           drag.moved = true;
         }
-        applyEraseMove(drag, screenToWorld(px, py));
-        updateEraseTip(event, drag);
+        if (drag.moved) {
+          updateEraseTip(event, drag);
+          requestDraw();
+        }
         updateHoverFromScreen(px, py);
         updateHud();
-        requestDraw();
       } else {
         drag.currentWorld = screenToWorld(px, py);
         if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 4) {
@@ -6071,7 +6294,8 @@
     hideActivityTip();
     updateCanvasCursor();
     if (drag.type === "erase") {
-      finishEraseDrag(drag);
+      if (cancelled) cancelEraseDrag(drag);
+      else applyEraseDrag(drag);
     } else if (!cancelled) {
       if (drag.type === "select") {
         if (drag.moved) {
@@ -6099,7 +6323,7 @@
     if (!drag) return;
     state.drag = null;
     dom.dragTip.hidden = true;
-    if (drag.type === "erase") finishEraseDrag(drag);
+    if (drag.type === "erase") cancelEraseDrag(drag);
     updateCanvasCursor();
     requestDraw();
   }
@@ -6171,6 +6395,10 @@
     const lines = ["区块 " + cx + ", " + cz];
     if (ticks === null) lines.push("活动时长数据缺失，重新扫描可更新");
     else lines.push("活动时长 " + formatActivityTicks(ticks));
+    const dim = currentDim();
+    if (dim && discardKeySet(dim.id).has(cx + "," + cz)) {
+      lines.push("已忽略 · 不参与备份（右键可恢复）");
+    }
     dom.activityTip.textContent = lines.join("\n");
     dom.activityTip.hidden = false;
     placeFloatingTip(dom.activityTip, event);
@@ -6211,12 +6439,48 @@
   }
 
   function updateEraseTip(event, drag) {
-    const parts = [];
-    if (drag.removed) parts.push("删除 " + drag.removed + " 个区块");
-    if (drag.discarded) parts.push("标记可抛弃 " + drag.discarded + " 个");
-    dom.dragTip.textContent = parts.length
-      ? parts.join("\n") + "\n松开右键结束"
-      : "按住右键拖拽可连续删除";
+    const rect = chunkRectFromBounds(computeDragBounds(drag.startWorld, drag.currentWorld));
+    const width = rect.x2 - rect.x1 + 1;
+    const height = rect.z2 - rect.z1 + 1;
+    const active = findActiveSelection();
+    const normal = new Set();
+    const activity = new Set();
+    for (const target of eraseTargetsFromRect(rect)) {
+      const bucket = target.sel.special === "activity" ? activity : normal;
+      for (const key of target.cells) bucket.add(key);
+    }
+    const dim = currentDim();
+    const marked =
+      active && active.special === "activity" && dim ? new Set(discardKeys(dim.id)) : null;
+    let toMark = 0;
+    let toRestore = 0;
+    if (marked) {
+      for (const key of activity) {
+        if (marked.has(key)) toRestore += 1;
+        else toMark += 1;
+      }
+    }
+    const lines = [
+      "X " + rect.x1 + " … " + rect.x2,
+      "Z " + rect.z1 + " … " + rect.z2,
+      width + " × " + height + " 方块",
+    ];
+    if (!active) {
+      lines.push("当前没有选区");
+      lines.push("先左键点击或 Alt+右键设为一个选区");
+      lines.push("松开右键不会删除");
+    } else if (!normal.size && !activity.size) {
+      lines.push("框内没有当前选区「" + active.desc + "」的区块");
+      lines.push("松开右键不会删除");
+    } else if (marked) {
+      if (toMark) lines.push("将标记 " + toMark + " 个活动区块为排除");
+      if (toRestore) lines.push("将恢复 " + toRestore + " 个活动区块");
+      lines.push("松开右键确认");
+    } else {
+      if (normal.size) lines.push("将删除 " + normal.size + " 个区块");
+      lines.push("松开右键确认");
+    }
+    dom.dragTip.textContent = lines.join("\n");
     dom.dragTip.classList.add("erasing");
     dom.dragTip.hidden = false;
     placeDragTip(event);

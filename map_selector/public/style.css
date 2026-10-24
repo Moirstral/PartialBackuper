@@ -1902,6 +1902,15 @@ code {
   white-space: nowrap;
 }
 
+.sel-discard-tag {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.16);
+  color: #fca5a5;
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
 .sel-desc.static {
   cursor: default;
   padding-left: 4px;
