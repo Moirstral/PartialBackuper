@@ -4,6 +4,7 @@ import os
 
 ROOT = SPECPATH
 MAP_SELECTOR = os.path.join(ROOT, "map_selector")
+ICON = os.path.join(MAP_SELECTOR, "app.ico")
 
 a = Analysis(
     [os.path.join(MAP_SELECTOR, "desktop.py")],
@@ -11,6 +12,7 @@ a = Analysis(
     binaries=[],
     datas=[
         (os.path.join(MAP_SELECTOR, "public"), "public"),
+        (ICON, "."),
         (os.path.join(ROOT, "global_config.json"), "."),
     ],
     hiddenimports=[
@@ -46,6 +48,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
+    icon=ICON,
 )
 
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="PartialBackuper")
