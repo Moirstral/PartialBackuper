@@ -7,10 +7,7 @@
   <meta name="theme-color" content="#080b10" />
   <title>MC存档选区备份工具</title>
   <link rel="stylesheet" href="/style.css" />
-  <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" type="image/svg+xml" href="/icon.svg" />
-  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
-  <link rel="apple-touch-icon" href="/icon-192.png" />
 </head>
 <body>
 <div class="app">
@@ -25,10 +22,6 @@
       <div class="brand-text">
         <div class="brand-title-row">
           <h1>MC存档选区备份工具</h1>
-          <span class="service-status" id="serviceStatus" data-state="connecting">
-            <span class="status-dot"></span>
-            <span class="status-label">连接中</span>
-          </span>
         </div>
         <p>可视化框选区块 · 生成备份配置</p>
       </div>
@@ -471,15 +464,9 @@
       <li>只删除当前选区里的区块，不会影响其他选区；活跃选区没有设为当前时也不会被改动。</li>
       <li>在活动选区里右键改为标记可抛弃：区块正中间显示红叉并留在选区里，再次右键即可恢复；标记只在备份时排除。</li>
       <li>拖拽时鼠标旁会显示红色框和将要删除或标记的区块数，松开右键才会生效；之后可以点「撤销」整批恢复。</li>
-      <li>如果右键拖拽触发了鼠标手势（例如页面后退、关闭标签页），可能是 Edge 自带的鼠标手势，也可能装了鼠标手势扩展。</li>
     </ul>
     <p class="dialog-tip">
-      <strong>Edge 自带手势：</strong>打开 Edge「设置 → 外观」，关闭「启用鼠标手势」
-      （或在设置顶部搜索“手势”）。PWA 应用窗口没有地址栏，请在普通 Edge 窗口里修改，
-      设置对所有 Edge 窗口生效。<br />
-      <strong>扩展手势：</strong>在 Edge 打开 <code>edge://extensions</code>（Chrome 为 <code>chrome://extensions</code>），
-      临时停用鼠标手势类扩展，或在其设置里取消「右键拖拽」手势。<br />
-      网页无法替你关闭这些设置，改完刷新本页即可。
+      桌面窗口里没有浏览器工具栏，也不会执行 Edge 的鼠标手势；右键拖拽只用于框选区块。
     </p>
     <div class="dialog-actions">
       <button type="button" class="btn primary" id="btnRightDragOk">知道了</button>

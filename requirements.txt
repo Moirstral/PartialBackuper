@@ -1,12 +1,14 @@
-# 本项目仅需 Python 标准库，无第三方依赖。
+# 桌面版（map_selector/desktop.py）需要第三方库；命令行备份仍然是纯标准库。
 #
-# script.py / backup_runner.py / map_selector/（server.py、renderer.py）
-# 全部基于 Python 自带的标准库：json、os、shutil、zipfile、tempfile、time、
-# argparse、re、sys、struct、gzip、zlib、hashlib、socket、threading、
-# concurrent.futures、webbrowser、pathlib、http.server、urllib 等。
+#   pip install -r requirements.txt
 #
-# 因此无需执行 `pip install -r requirements.txt`；本文件仅用于说明依赖情况。
-# 保留它也不会报错：以下均为注释，pip 会跳过。
-#
-# 需要 Python 3（http.server 的 ThreadingHTTPServer 等自 3.7 起可用；
-# 开发与测试环境为 Python 3.15）。
+# 桌面窗口用系统自带的 WebView2（Edge/Chrome 内核，Windows 10/11 一般已预装）。
+pywebview>=5.1,<7
+# pywebview 在 Windows 上通过 pythonnet 调用 WinForms 承载 WebView2。
+# pythonnet 目前没有新版 Python 的预编译轮子，实测可用范围是 Python 3.8–3.12；
+# 用更新的 Python 源码直跑请先装一个 3.12 及以下的解释器，或直接用打包好的 exe。
+pythonnet>=3.0.1
+
+# 仅打包 exe 时需要（终端用户不用装）：
+#   pip install pyinstaller
+#   pyinstaller --noconfirm --clean PartialBackuper.spec

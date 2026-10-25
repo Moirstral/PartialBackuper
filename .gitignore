@@ -16,6 +16,11 @@ desktop.ini
 map_selector/world.json
 # rendered tile cache
 map_selector/.cache/
+# desktop build: virtualenv, PyInstaller output, portable data folder
+.venv*/
+build/
+dist/
+UserData/
 
 # --- Backup config data (private; keep only the template + its README) ---
 configs/*

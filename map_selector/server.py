@@ -4,6 +4,7 @@ import glob
 import gzip
 import hashlib
 import json
+import multiprocessing
 import os
 import re
 import shutil
@@ -15,7 +16,6 @@ import tempfile
 import threading
 import time
 import traceback
-import webbrowser
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -25,7 +25,11 @@ from renderer import read_chunk_activity, read_gzip_nbt, read_region_chunk, rend
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BASE_DIR.parent
-PUBLIC_DIR = BASE_DIR / "public"
+FROZEN = getattr(sys, "frozen", False)
+# 打包后只读资源（public/）在 PyInstaller 解包目录里，可写数据跟着 exe 所在目录
+RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR)) if FROZEN else BASE_DIR
+APP_DIR = Path(sys.executable).resolve().parent if FROZEN else PROJECT_DIR
+PUBLIC_DIR = RESOURCE_DIR / "public"
 CACHE_DIR = BASE_DIR / ".cache"
 CONFIG_FILE = BASE_DIR / "world.json"
 CONFIGS_DIR = PROJECT_DIR / "configs"
@@ -65,80 +69,36 @@ VERBOSE = False
 BACKUP_LOCK = threading.Lock()
 BACKUP_JOB = None
 
-SHUTDOWN_GRACE = 1.0  # 页面关闭上报后等待的秒数（保持短暂，关页即停）
-PAGE_TIMEOUT = 1800.0  # 心跳超时多久后回收 SID（仅清理内存，不触发停服）
-FRESH_WINDOW = 6.0  # 多久内有心跳算页面仍活跃（略大于前端 5 秒心跳间隔）
-
-SERVER_LOCK = threading.Lock()
-ACTIVE_PAGES = {}  # sid -> last_seen
-PENDING_CLOSE_AT = None  # 最近一次“页面关闭”上报时间
+DATA_ROOT = None  # 由 configure_storage() 指定；None 表示沿用仓库内路径
 
 
-def touch_page(sid):
-    global PENDING_CLOSE_AT
-    if not sid:
-        return
-    with SERVER_LOCK:
-        now = time.time()
-        # 仍有页面在发心跳，取消待关闭
-        PENDING_CLOSE_AT = None
-        if sid not in ACTIVE_PAGES:
-            # 新 SID 加入：如果所有现有 SID 都超过 3 秒没心跳，判定为刷新残留
-            if ACTIVE_PAGES and all(now - t > 3.0 for t in ACTIVE_PAGES.values()):
-                if VERBOSE:
-                    stale = [s[:8] for s in ACTIVE_PAGES]
-                    print(f"[touch] 新页面加入，清理刷新残留 SID: {stale}")
-                ACTIVE_PAGES.clear()
-        ACTIVE_PAGES[sid] = now
+def configure_storage(data_dir, configs_dir=None):
+    """把可写数据（瓦片缓存、上次存档、备份配置）集中到一个目录。
 
-
-def report_page_closed(sid):
-    """页面关闭上报：移除该页面并进入待关闭状态。
-
-    停服由这个显式上报驱动，而不是“活跃页面数为 0”，
-    这样刷新残留的 SID 不会被误当成“还有页面开着”。
+    桌面版用它实现「便携 / 系统目录」两种落盘位置；源码直跑不调用，保持原路径。
+    configs_dir 用于源码直跑时继续读仓库里的 configs/。
     """
-    global PENDING_CLOSE_AT
-    with SERVER_LOCK:
-        if sid:
-            ACTIVE_PAGES.pop(sid, None)
-        PENDING_CLOSE_AT = time.time()
+    global CACHE_DIR, CONFIG_FILE, CONFIGS_DIR, DATA_ROOT
+    root = Path(data_dir)
+    DATA_ROOT = root
+    CACHE_DIR = root / ".cache"
+    CONFIG_FILE = root / "world.json"
+    CONFIGS_DIR = Path(configs_dir) if configs_dir else root / "configs"
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def note_navigation():
-    """刷新/新标签会重新请求首页，此时不应把旧页面的关闭上报当作停服信号。"""
-    global PENDING_CLOSE_AT
-    with SERVER_LOCK:
-        PENDING_CLOSE_AT = None
+def backup_command(cfg_path):
+    """备份子进程命令：打包后用 exe 自身的 --run-backup 子命令。"""
+    if FROZEN:
+        return [sys.executable, "--run-backup", str(cfg_path)]
+    return [sys.executable, "-u", str(BACKUP_RUNNER), str(cfg_path)]
 
 
-def shutdown_watcher(httpd):
-    global PENDING_CLOSE_AT
-    while True:
-        time.sleep(0.2)
-        now = time.time()
-        with SERVER_LOCK:
-            dead = [sid for sid, t in ACTIVE_PAGES.items() if now - t > PAGE_TIMEOUT]
-            for sid in dead:
-                ACTIVE_PAGES.pop(sid, None)
-            pending = PENDING_CLOSE_AT
-            if pending is not None and any(
-                now - t <= FRESH_WINDOW for t in ACTIVE_PAGES.values()
-            ):
-                # 还有别的页面在正常心跳（例如多标签页），取消关闭
-                PENDING_CLOSE_AT = None
-                pending = None
-
-        if pending is None or now - pending < SHUTDOWN_GRACE:
-            continue
-        with BACKUP_LOCK:
-            backup_running = BACKUP_JOB is not None and BACKUP_JOB["running"]
-        if backup_running:
-            # 备份进行中不自动停服，等它结束后再判断
-            continue
-        print("\n所有页面已关闭，正在停止服务器…")
-        httpd.shutdown()
-        return
+def backup_running():
+    """桌面版关闭前确认用：是否有备份正在进行。"""
+    with BACKUP_LOCK:
+        return bool(BACKUP_JOB and BACKUP_JOB.get("running"))
 
 class WorldData:
     __slots__ = ("info", "index", "hash", "json")
@@ -890,7 +850,7 @@ def run_backup_job(job, cfg_path, save_path, chunk_only=False, note="", cleanup_
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUNBUFFERED"] = "1"
     flags = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
-    cmd = [sys.executable, "-u", str(BACKUP_RUNNER), str(cfg_path)]
+    cmd = backup_command(cfg_path)
     if chunk_only:
         cmd.append("--chunk-only")
     if note:
@@ -898,7 +858,7 @@ def run_backup_job(job, cfg_path, save_path, chunk_only=False, note="", cleanup_
     try:
         proc = subprocess.Popen(
             cmd,
-            cwd=str(PROJECT_DIR),
+            cwd=str(APP_DIR),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -1060,10 +1020,6 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         qs = parse_qs(parsed.query)
-        if path in ("/", "/index.html"):
-            # 刷新/新标签会重新请求首页，撤销上一页面关闭上报带来的待关闭状态
-            note_navigation()
-        touch_page(qs.get("sid", [""])[0])
         try:
             parsed = urlparse(self.path)
             path = parsed.path
@@ -1158,11 +1114,6 @@ class Handler(BaseHTTPRequestHandler):
         try:
             parsed = urlparse(self.path)
             data = self.read_json_body()
-
-            if parsed.path == "/api/shutdown":
-                report_page_closed(data.get("sid") or "")
-                self.send_json({"ok": True})
-                return
 
             if parsed.path == "/api/pick-folder":
                 raw = data.get("initial")
@@ -1306,11 +1257,8 @@ class Handler(BaseHTTPRequestHandler):
         files = {
             "/": ("index.html", "text/html; charset=utf-8"),
             "/index.html": ("index.html", "text/html; charset=utf-8"),
-            "/offline.html": ("offline.html", "text/html; charset=utf-8"),
             "/app.js": ("app.js", "application/javascript; charset=utf-8"),
             "/style.css": ("style.css", "text/css; charset=utf-8"),
-            "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json; charset=utf-8"),
-            "/sw.js": ("sw.js", "application/javascript; charset=utf-8"),
             "/icon.svg": ("icon.svg", "image/svg+xml"),
             "/icon-192.png": ("icon-192.png", "image/png"),
             "/icon-512.png": ("icon-512.png", "image/png"),
@@ -1411,183 +1359,87 @@ def init_worker():
     except (OSError, ValueError):
         pass
 
-def launch_pwa_shortcut():
-    lnk = BASE_DIR / "app.lnk"
-    if not lnk.is_file():
-        return False
-    try:
-        os.startfile(str(lnk))
-        print(f"已通过快捷方式启动 PWA：{lnk.name}")
-        return True
-    except OSError as e:
-        print(f"快捷方式启动失败：{e}")
-        return False
-
-def launch_app_window(url: str) -> bool:
-    """跨平台尝试以应用窗口模式启动 URL。返回 True 表示已用特殊模式启动。"""
-    exe_candidates = []
-    if sys.platform == "win32":
-        exe_candidates = [
-            shutil.which("chrome"),
-            shutil.which("msedge"),
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-        ]
-    elif sys.platform == "darwin":
-        exe_candidates = [
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-            "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-        ]
-    elif sys.platform.startswith("linux"):
-        exe_candidates = [
-            shutil.which("google-chrome"),
-            shutil.which("microsoft-edge"),
-            shutil.which("brave-browser"),
-            shutil.which("chromium"),
-        ]
-
-    # 1) 优先 Chromium 系 --app
-    for exe in exe_candidates:
-        if exe and os.path.isfile(exe):
-            try:
-                subprocess.Popen([exe, f"--app={url}"])
-                return True
-            except OSError:
-                continue
-
-    # 2) 回退 Firefox -kiosk（全屏无UI，体验有限）
-    firefox = shutil.which("firefox")
-    if firefox:
-        try:
-            subprocess.Popen([firefox, "-kiosk", url])
-            return True
-        except OSError:
-            pass
-
-    # 3) 最终回退：普通浏览器标签页
-    webbrowser.open(url)
-    return False
-
-_TRUE_VALS = {"1", "true", "yes", "on", ""}
-_FALSE_VALS = {"0", "false", "no", "off"}
-
-
-def normalize_argv(argv):
-    """翻译 mcbackup:// 协议 URL 为命令行参数。
-
-    规则：
-      - mcbackup://start?<query>    → query 里每个 key 都变成 --key [value]
-      - mcbackup://backend?<query>  → 同上，最后强制追加 --no-browser
-      - 其它 argv 原样透传
-
-    query 映射规则：
-      ?port=8787        → --port 8787
-      ?world=E:/saves   → --world E:/saves（值需 URL 编码，parse_qs 自动解码）
-      ?verbose          → --verbose（无值视为开）
-      ?verbose=1        → --verbose
-      ?verbose=0        → 忽略（false 值不传）
-    """
-    out = []
-    for arg in argv:
-        if not arg.startswith("mcbackup://"):
-            out.append(arg)
-            continue
-
-        parsed = urlparse(arg)
-        action = parsed.netloc.lower()
-        if action not in ("start", "backend"):
-            continue  # 未知动作直接忽略
-
-        qs = parse_qs(parsed.query, keep_blank_values=True)
-        cli = []
-        for key, vals in qs.items():
-            if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]*", key):
-                continue
-            val = vals[-1] if vals else ""
-            low = val.lower()
-            if low in _FALSE_VALS:
-                continue
-            if low in _TRUE_VALS:
-                cli.append("--" + key)
-            else:
-                cli.extend(["--" + key, val])
-
-        if action == "backend" and "--no-browser" not in cli:
-            cli.append("--no-browser")
-
-        out.extend(cli)
-    return out
-
-def main():
-    global EXECUTOR, VERBOSE
-    parser = argparse.ArgumentParser(description="MC存档选区备份工具")
-    parser.add_argument("--world", help="存档目录")
-    parser.add_argument("--port", type=int, default=None,
-                    help=f"指定后仅使用该端口，占用则报错退出；不指定时从 {DEFAULT_PORT} 起自动寻找")
-    parser.add_argument("--no-browser", action="store_true")
-    parser.add_argument("--verbose", action="store_true")
-    args = parser.parse_args(normalize_argv(sys.argv[1:]))
-    VERBOSE = args.verbose
-
+def start_executor():
+    """建瓦片渲染进程池 + 缓存清理线程。"""
+    global EXECUTOR
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     workers = max(1, min(8, (os.cpu_count() or 4) - 1))
     EXECUTOR = concurrent.futures.ProcessPoolExecutor(
         max_workers=workers, initializer=init_worker
     )
+    threading.Thread(target=cleanup_cache, daemon=True).start()
 
+
+def create_server(port=None):
+    """绑定回环端口并返回 (httpd, port)。"""
+    if port is not None:
+        if not (0 < port < 65536):
+            raise RuntimeError(f"端口 {port} 无效，需要在 1–65535 之间")
+        port = find_port(port, strict=True)
+    else:
+        port = find_port(DEFAULT_PORT)
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    httpd.daemon_threads = True
+    return httpd, port
+
+
+def shutdown_executor():
+    """结束瓦片渲染进程池。
+
+    Python 3.8 的 shutdown() 没有 cancel_futures，而打包后的 worker 进程不会自己
+    收尾，主进程退出时会卡在解释器清理阶段，所以这里显式回收所有子进程。
+    """
+    global EXECUTOR
+    executor, EXECUTOR = EXECUTOR, None
+    workers = []
+    if executor is not None:
+        workers = list(getattr(executor, "_processes", {}).values())
+        try:
+            executor.shutdown(wait=False)
+        except Exception:
+            pass
+    for child in workers + multiprocessing.active_children():
+        try:
+            child.terminate()
+        except Exception:
+            pass
+
+
+def stop_server(httpd):
+    if httpd is not None:
+        httpd.shutdown()
+        httpd.server_close()
+    shutdown_executor()
+
+
+def main():
+    """无界面模式（调试用）：只起后端，Ctrl+C 停止。桌面窗口见 desktop.py。"""
+    global VERBOSE
+    parser = argparse.ArgumentParser(description="MC存档选区备份工具 · 后端服务")
+    parser.add_argument("--world", help="存档目录")
+    parser.add_argument("--port", type=int, default=None,
+                    help=f"指定后仅使用该端口，占用则报错退出；不指定时从 {DEFAULT_PORT} 起自动寻找")
+    parser.add_argument("--verbose", action="store_true")
+    args = parser.parse_args()
+    VERBOSE = args.verbose
+
+    start_executor()
     if args.world:
         try:
             load_world(args.world, persist=True)
         except ValueError as e:
             print(f"无法加载存档：{e}")
 
-    threading.Thread(target=cleanup_cache, daemon=True).start()
-
-    try:
-        if args.port is not None:
-            if not (0 < args.port < 65536):
-                raise RuntimeError(f"端口 {args.port} 无效，需要在 1–65535 之间")
-            port = find_port(args.port, strict=True)
-        else:
-            port = find_port(DEFAULT_PORT)
-    except RuntimeError as e:
-        EXECUTOR.shutdown(wait=False, cancel_futures=True)
-        raise
-
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    httpd.daemon_threads = True
-    # 启动看门狗
-    threading.Thread(target=shutdown_watcher, args=(httpd,), daemon=True).start()
+    httpd, port = create_server(args.port)
     url = f"http://127.0.0.1:{port}/"
     print(f"MC存档选区备份工具已启动：{url}")
-    # print(f"存档：{WORLD_DATA.info['path'] if WORLD_DATA else '尚未选择'}")
-    if not args.no_browser:
-        def open_app():
-            if launch_pwa_shortcut():
-                # 启动了 PWA 快捷方式，等 8 秒看是否有发心跳
-                def verify():
-                    time.sleep(8)
-                    with SERVER_LOCK:
-                        alive = len(ACTIVE_PAGES) > 0
-                    if not alive:
-                        print("PWA 未产生心跳，使用浏览器打开…")
-                        launch_app_window(url)
-                threading.Thread(target=verify, daemon=True).start()
-            else:
-                print("没有找到 app.lnk，自动打开浏览器…")
-                launch_app_window(url)
-            print("若未启动成功，请手动点击或复制上方URL打开浏览器使用")
-            print("\n关闭网页本窗口自动关闭，或按 Ctrl+C 停止。")
-        threading.Timer(0.1, open_app).start()
     print("\n按 Ctrl+C 停止。")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\n正在安全退出…")
     finally:
-        httpd.server_close()
-        EXECUTOR.shutdown(wait=False, cancel_futures=True)
+        stop_server(httpd)
         print("已停止。")
 
 
@@ -1596,15 +1448,6 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
-    except Exception as e:
-        # Keep the window readable when launched by start_map.bat (cmd /c closes on exit).
-        if VERBOSE:
-            traceback.print_exc()
-        else:
-            print(f"{e}")
-        print("\n启动失败")
-        for sec in range(3, 0, -1):
-            print(f"\r{sec} 秒后关闭窗口… ", end="", flush=True)
-            time.sleep(1)
-        print("\r窗口关闭中…" + " " * 20, flush=True)
+    except Exception:
+        traceback.print_exc()
         sys.exit(1)
