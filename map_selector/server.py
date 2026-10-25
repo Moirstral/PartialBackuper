@@ -3,10 +3,12 @@ import concurrent.futures
 import glob
 import gzip
 import hashlib
+import hmac
 import json
 import multiprocessing
 import os
 import re
+import secrets
 import shutil
 import signal
 import socket
@@ -70,6 +72,22 @@ BACKUP_LOCK = threading.Lock()
 BACKUP_JOB = None
 
 DATA_ROOT = None  # 由 configure_storage() 指定；None 表示沿用仓库内路径
+DESKTOP = None  # 由桌面版入口注入的窗口控制器
+SERVER_PORT = None  # create_server() 绑定的端口，用于校验 Host
+API_TOKEN = ""  # 写操作令牌，页面靠 cookie、外部程序靠 X-PB-Token
+TOKEN_FILE = BASE_DIR / "api-token.txt"
+TOKEN_COOKIE = "pb_token"
+# 只放行桌面控制器上确实存在的动作，URL 不能点到任意 api_* 方法
+DESKTOP_ACTIONS = {
+    "state", "window", "press", "title", "quit",
+    "close_choice", "wake", "settings", "setup",
+}
+
+
+def set_desktop(bridge):
+    """桌面版把窗口控制器交给后端，页面通过 /api/desktop/* 调用它。"""
+    global DESKTOP
+    DESKTOP = bridge
 
 
 def configure_storage(data_dir, configs_dir=None):
@@ -78,12 +96,13 @@ def configure_storage(data_dir, configs_dir=None):
     桌面版用它实现「便携 / 系统目录」两种落盘位置；源码直跑不调用，保持原路径。
     configs_dir 用于源码直跑时继续读仓库里的 configs/。
     """
-    global CACHE_DIR, CONFIG_FILE, CONFIGS_DIR, DATA_ROOT
+    global CACHE_DIR, CONFIG_FILE, CONFIGS_DIR, DATA_ROOT, TOKEN_FILE
     root = Path(data_dir)
     DATA_ROOT = root
     CACHE_DIR = root / ".cache"
     CONFIG_FILE = root / "world.json"
     CONFIGS_DIR = Path(configs_dir) if configs_dir else root / "configs"
+    TOKEN_FILE = root / "api-token.txt"
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -926,7 +945,7 @@ def start_backup(path=None, chunk_only=False, note="", extra_partials=None, conf
     note = note.strip()[:40] if isinstance(note, str) else ""
     if config is not None:
         cfg = validate_config(config)
-        display_name = (name.strip()[:80] if isinstance(name, str) and name.strip() else "") or "浏览器配置"
+        display_name = (name.strip()[:80] if isinstance(name, str) and name.strip() else "") or "未保存的配置"
         cfg_path = None
     else:
         cfg = read_config_file(path)
@@ -993,10 +1012,47 @@ def start_backup(path=None, chunk_only=False, note="", extra_partials=None, conf
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "MCWorldMap/1.0"
+    # 空闲的 keep-alive 连接不能一直占着一个线程
+    timeout = 30
 
     def log_message(self, fmt, *args):
         if VERBOSE:
             super().log_message(fmt, *args)
+
+    def reject(self, status, message):
+        """拒绝请求时直接断开：还没读 body，继续复用连接会把下一条请求读串。"""
+        self.close_connection = True
+        body = json.dumps({"error": message}, ensure_ascii=False).encode("utf-8")
+        self.send_bytes(body, "application/json; charset=utf-8", status,
+                        {"Connection": "close"})
+
+    def host_allowed(self):
+        """只接受本机回环地址的 Host，挡掉 DNS rebinding。"""
+        host = (self.headers.get("Host") or "").strip().lower()
+        if not host or SERVER_PORT is None:
+            return False
+        name, _, port = host.partition(":")
+        if name not in ("127.0.0.1", "localhost"):
+            return False
+        return port == str(SERVER_PORT)
+
+    def token_cookie_name(self):
+        # 浏览器的 cookie 不区分端口，加端口才能让同一台机器上的两个实例互不覆盖
+        return "%s_%s" % (TOKEN_COOKIE, SERVER_PORT)
+
+    def auth_ok(self):
+        """写操作要令牌：页面用同站 cookie，外部程序（比如游戏内 mod）用请求头。"""
+        if not API_TOKEN:
+            return False
+        header = (self.headers.get("X-PB-Token") or "").strip()
+        if header and hmac.compare_digest(header, API_TOKEN):
+            return True
+        name_wanted = self.token_cookie_name()
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == name_wanted and hmac.compare_digest(value.strip(), API_TOKEN):
+                return True
+        return False
 
     def send_bytes(self, body, content_type, status=200, extra=None):
         self.send_response(status)
@@ -1017,12 +1073,18 @@ class Handler(BaseHTTPRequestHandler):
         self.send_bytes(body, "application/json; charset=utf-8", status)
 
     def do_GET(self):
+        if not self.host_allowed():
+            self.reject(403, "不允许的访问来源")
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         qs = parse_qs(parsed.query)
         try:
             parsed = urlparse(self.path)
             path = parsed.path
+            if path == "/api/desktop/state":
+                self.send_json(DESKTOP.api_state() if DESKTOP else {"enabled": False})
+                return
             if path == "/api/health":
                 self.send_json({"ok": True})
                 return
@@ -1111,9 +1173,25 @@ class Handler(BaseHTTPRequestHandler):
         return data
 
     def do_POST(self):
+        if not self.host_allowed():
+            self.reject(403, "不允许的访问来源")
+            return
+        # 浏览器跨站表单只能发 text/plain 之类的简单请求；只收 JSON 就能挡掉
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            self.reject(415, "请求必须是 application/json")
+            return
+        if not self.auth_ok():
+            self.reject(401, "缺少接口令牌")
+            return
         try:
             parsed = urlparse(self.path)
             data = self.read_json_body()
+
+            if parsed.path.startswith("/api/desktop/"):
+                name = parsed.path.rsplit("/", 1)[-1].replace("-", "_")
+                self.handle_desktop(name, data)
+                return
 
             if parsed.path == "/api/pick-folder":
                 raw = data.get("initial")
@@ -1215,6 +1293,23 @@ class Handler(BaseHTTPRequestHandler):
                 traceback.print_exc()
             self.send_json({"error": str(e)}, 500)
 
+    def handle_desktop(self, name, data):
+        """把 /api/desktop/<name> 转交给桌面版入口的控制器。"""
+        if DESKTOP is None:
+            self.send_json({"error": "窗口控制只在桌面版可用"}, 409)
+            return
+        if name not in DESKTOP_ACTIONS:
+            self.send_json({"error": "未知的桌面接口"}, 404)
+            return
+        handler = getattr(DESKTOP, "api_" + name, None)
+        if handler is None:
+            self.send_json({"error": "未知的桌面接口"}, 404)
+            return
+        try:
+            self.send_json(handler(data))
+        except ValueError as e:
+            self.send_json({"error": str(e)}, 400)
+
     def handle_tile(self, qs):
         wd = get_world()
         if wd is None:
@@ -1276,7 +1371,14 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             self.send_json({"error": "缺少静态文件"}, 404)
             return
-        self.send_bytes(body, item[1])
+        extra = None
+        if item[0] == "index.html" and API_TOKEN:
+            # 页面从这里领 cookie，之后同源 fetch 自动带上；外部程序用请求头
+            extra = {
+                "Set-Cookie": "%s=%s; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000"
+                % (self.token_cookie_name(), API_TOKEN)
+            }
+        self.send_bytes(body, item[1], extra=extra)
 
 
 def find_port(start, strict=False):
@@ -1370,14 +1472,37 @@ def start_executor():
     threading.Thread(target=cleanup_cache, daemon=True).start()
 
 
+def load_or_create_token():
+    """接口令牌：存在数据目录里，重启后继续有效（PWA 的 cookie 和外部程序都能沿用）。"""
+    global API_TOKEN
+    try:
+        token = TOKEN_FILE.read_text(encoding="utf-8").strip()
+        if len(token) >= 32 and all(c in "0123456789abcdef" for c in token):
+            API_TOKEN = token
+            return token
+    except OSError:
+        pass
+    token = secrets.token_hex(32)
+    try:
+        TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        TOKEN_FILE.write_text(token, encoding="utf-8")
+    except OSError as e:
+        print(f"写入接口令牌失败：{e}")
+    API_TOKEN = token
+    return token
+
+
 def create_server(port=None):
     """绑定回环端口并返回 (httpd, port)。"""
+    global SERVER_PORT
     if port is not None:
         if not (0 < port < 65536):
             raise RuntimeError(f"端口 {port} 无效，需要在 1–65535 之间")
         port = find_port(port, strict=True)
     else:
         port = find_port(DEFAULT_PORT)
+    load_or_create_token()
+    SERVER_PORT = port
     httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     httpd.daemon_threads = True
     return httpd, port

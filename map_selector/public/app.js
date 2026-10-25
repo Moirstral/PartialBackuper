@@ -172,6 +172,31 @@
     dialogError: $id("dialogError"),
     btnDialogCancel: $id("btnDialogCancel"),
     btnDialogOpen: $id("btnDialogOpen"),
+    btnSettings: $id("btnDesktopSettings"),
+    winStrip: $id("winStrip"),
+    btnWinMin: $id("btnWinMin"),
+    btnWinMax: $id("btnWinMax"),
+    btnWinClose: $id("btnWinClose"),
+    setupDialog: $id("setupDialog"),
+    setupTitle: $id("setupTitle"),
+    setupTip: $id("setupTip"),
+    setupError: $id("setupError"),
+    setupBusy: $id("setupBusy"),
+    setupPathPortable: $id("setupPathPortable"),
+    setupPathAppdata: $id("setupPathAppdata"),
+    btnSetupCancel: $id("btnSetupCancel"),
+    btnSetupQuit: $id("btnSetupQuit"),
+    desktopDialog: $id("desktopDialog"),
+    closeModeSelect: $id("closeModeSelect"),
+    desktopDataMode: $id("desktopDataMode"),
+    desktopDataPath: $id("desktopDataPath"),
+    btnChangeDataDir: $id("btnChangeDataDir"),
+    btnDesktopClose: $id("btnDesktopClose"),
+    closeAskDialog: $id("closeAskDialog"),
+    closeAskRemember: $id("closeAskRemember"),
+    btnCloseAskCancel: $id("btnCloseAskCancel"),
+    btnCloseExit: $id("btnCloseExit"),
+    btnCloseTray: $id("btnCloseTray"),
     toast: $id("toast"),
     toastText: $id("toastText"),
     toastAction: $id("toastAction"),
@@ -241,6 +266,7 @@
     activityMinByDim: {},
     activityBackupByDim: {},
     activityPromptTargets: null,
+    dropBusy: false,
   };
   const LEGACY_FOLDER_DIM = {
     region: "minecraft:overworld",
@@ -251,6 +277,8 @@
 
   let ctx = null;
   let saveEntriesPromise = null;
+  let desktopBound = false;
+  let lastEdgeCursor = "";
   let dpr = 1;
   let cssW = 1;
   let cssH = 1;
@@ -407,6 +435,8 @@
     resizeCanvas();
     setEmptyState();
 
+    await initDesktop();
+
     try {
       await refreshConfigList();
     } catch (err) {
@@ -415,7 +445,8 @@
       showToast("无法读取备份配置目录：" + err.message, { error: true, duration: 5000 });
     }
 
-    if (!offerDraftRecovery()) await autoLoadPreferredConfig();
+    if (desktop.world) await window.DesktopDrop({ paths: [desktop.world] });
+    else if (!offerDraftRecovery()) await autoLoadPreferredConfig();
 
     requestDraw();
     loadBackupStatus();
@@ -560,7 +591,7 @@
     state.pendingDraft = draft;
     dom.recoverSummary.replaceChildren();
     addRecoverRow("存档", (draft.worldName || "未命名存档") + " · " + draft.worldPath);
-    addRecoverRow("配置文件", draft.configFile || "仅浏览器（草稿）");
+    addRecoverRow("配置文件", draft.configFile || "未保存（草稿）");
     addRecoverRow("选区", draftSelectionCount(draft) + " 条");
     const ignoreCount =
       (Array.isArray(draft.ignores) ? draft.ignores.length : 0) +
@@ -648,7 +679,29 @@
     loadBackupStatus();
   }
 
+  // 每个弹窗右上角补一个「×」：点它和按 Esc 一样是「放弃这次操作」。
+  // 先走一遍 cancel 事件，正在扫描/备份的弹窗自己会拦下来，不能从 × 绕过去。
+  function addDialogCloseButtons() {
+    for (const dialog of document.querySelectorAll("dialog.world-dialog")) {
+      const card = dialog.querySelector("form") || dialog.querySelector(".dialog-card");
+      if (!card || card.querySelector(".dialog-close")) continue;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "dialog-close";
+      button.title = "关闭（放弃本次操作）";
+      button.setAttribute("aria-label", "关闭");
+      button.innerHTML =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>';
+      button.addEventListener("click", () => {
+        if (!dialog.dispatchEvent(new Event("cancel", { cancelable: true }))) return;
+        dialog.close();
+      });
+      card.appendChild(button);
+    }
+  }
+
   function bindEvents() {
+    addDialogCloseButtons();
     dom.btnSwitchWorld.addEventListener("click", openWorldDialog);
     dom.btnOpenWorld.addEventListener("click", openWorldDialog);
     dom.btnOpenConfig.addEventListener("click", openConfigPicker);
@@ -673,6 +726,7 @@
     window.addEventListener("drop", (event) => {
       if (!isFileDrag(event)) return;
       event.preventDefault();
+      if (desktop.enabled) return;
       if (state.info || dom.worldDialog.open) return;
       showToast("浏览器不允许网页读取拖入文件夹的路径，请点「浏览…」选择", { duration: 5600 });
       openWorldDialog();
@@ -898,6 +952,315 @@
     updateCanvasCursor();
   }
 
+  // ---------------------------------------------------------------- 桌面窗口
+
+  const desktop = {
+    enabled: false,
+    setup: false,
+    mode: "",
+    dataDir: "",
+    world: "",
+    options: { portable: "", appdata: "" },
+    settings: { on_close: "ask" },
+    maximized: false,
+    trayAvailable: true,
+    resizeBand: 8,
+    dragThreshold: 4,
+  };
+
+  const MODE_LABELS = { portable: "随程序便携", appdata: "系统目录", custom: "命令行指定", pending: "还没选择" };
+
+  async function initDesktop() {
+    let data = null;
+    try {
+      data = await api("/api/desktop/state");
+    } catch (err) {
+      return; // 用浏览器打开时没有桌面接口，保持网页形态
+    }
+    if (!data || !data.enabled) return;
+    desktop.enabled = true;
+    desktop.setup = !!data.setup;
+    desktop.mode = data.mode || "";
+    desktop.dataDir = data.dataDir || "";
+    desktop.world = data.world || "";
+    desktop.options = data.options || desktop.options;
+    desktop.settings = Object.assign(desktop.settings, data.settings || {});
+    desktop.maximized = !!data.maximized;
+    desktop.trayAvailable = !!data.trayAvailable;
+    desktop.resizeBand = data.resizeBand || 8;
+    desktop.dragThreshold = data.dragThreshold || 4;
+    document.body.classList.add("desktop");
+    dom.winStrip.hidden = false;
+    bindDesktopOnce();
+    renderDesktopUI();
+    if (!state.info) renderEmptyHints();
+    if (desktop.setup) openSetupDialog(true);
+  }
+
+  function bindDesktopOnce() {
+    if (desktopBound) return;
+    desktopBound = true;
+
+    dom.btnSettings.addEventListener("click", openDesktopDialog);
+    dom.btnDesktopClose.addEventListener("click", () => dom.desktopDialog.close());
+    dom.closeModeSelect.addEventListener("change", async () => {
+      const value = dom.closeModeSelect.value;
+      const data = await desktopCall("/api/desktop/settings", { on_close: value });
+      if (data && data.settings) Object.assign(desktop.settings, data.settings);
+      else dom.closeModeSelect.value = desktop.settings.on_close || "ask";
+      renderDesktopUI();
+    });
+    dom.btnChangeDataDir.addEventListener("click", () => openSetupDialog(false));
+
+    for (const button of dom.setupDialog.querySelectorAll(".setup-option")) {
+      button.addEventListener("click", () => chooseDataDir(button.dataset.mode));
+    }
+    dom.btnSetupCancel.addEventListener("click", () => dom.setupDialog.close());
+    dom.btnSetupQuit.addEventListener("click", () => desktopCall("/api/desktop/quit"));
+    dom.setupDialog.addEventListener("cancel", (event) => {
+      if (desktop.setup) event.preventDefault(); // 首次启动必须选一个位置
+    });
+
+    dom.btnCloseAskCancel.addEventListener("click", () => dom.closeAskDialog.close());
+    dom.btnCloseTray.addEventListener("click", () => sendCloseChoice("tray"));
+    dom.btnCloseExit.addEventListener("click", () => sendCloseChoice("exit"));
+
+    dom.btnWinMin.addEventListener("click", () => desktopWindow("minimize"));
+    dom.btnWinMax.addEventListener("click", () => desktopWindow("toggle-maximize"));
+    dom.btnWinClose.addEventListener("click", () => desktopWindow("close"));
+    bindNativePress();
+    keepWinStripReachable();
+  }
+
+  // 网页控件铺满了整个窗口，系统的窗口过程收不到任何鼠标按下，所以由页面转告这一按的位置：
+  // 顶栏和左上角标题算「标题栏」，贴边那几像素算对应的边框。
+  // 转告的节奏和系统自己等的一样：按下只登记，挪过系统认定的拖动距离（SM_CXDRAG）才交给系统，
+  // 之后拖动、贴边分屏、最大化后拖走回到鼠标底下、光标形状和动画全是系统的行为；
+  // 双击放大还原由后端判成后调用系统改窗口状态（和右上角按钮同一条路）。
+  // 页面只报告事实：按下了、挪够了。判单击还是双击由后端照系统的双击间隔与范围说，
+  // 连击数不能问浏览器：第一按挪过阈值就交给系统的模态循环了，循环把松开吃掉，
+  // 浏览器从此认定左键还按着，第二下的连击数永远数不到 2，双击放大就是这么没的。
+  function bindNativePress() {
+    let armed = null; // 按住了但还没交给系统：{target, x, y}
+    document.addEventListener(
+      "mousedown",
+      (event) => {
+        if (event.button !== 0) return;
+        const target = pressTarget(event);
+        if (!target) return;
+        event.preventDefault();
+        event.stopPropagation(); // 这一按归窗口了，底下那张图不能再跟着选区
+        const press = { target, x: event.screenX, y: event.screenY };
+        armed = press;
+        desktopCall("/api/desktop/press", { target, phase: "down" }).then((data) => {
+          // 后端把这一按判成双击了，接下来再挪也不算拖动，别把它交给系统
+          if (armed === press && (!data || data.action !== "armed")) armed = null;
+        });
+      },
+      true
+    );
+    // 挪够了才算拖动，这个距离由系统给（页面不自作主张）；起点仍是按下那一点，窗口不会慢半拍
+    document.addEventListener(
+      "mousemove",
+      (event) => {
+        if (!armed || event.buttons !== 1) return;
+        const gap = (desktop.dragThreshold || 4) / (window.devicePixelRatio || 1);
+        if (Math.abs(event.screenX - armed.x) < gap && Math.abs(event.screenY - armed.y) < gap) return;
+        const target = armed.target;
+        armed = null;
+        desktopCall("/api/desktop/press", { target, phase: "move" });
+      },
+      true
+    );
+    // 没挪够就松手：这一下只是单击，什么都不用再告诉系统
+    document.addEventListener("mouseup", () => { armed = null; }, true);
+    document.addEventListener("pointermove", showResizeCursor, { passive: true });
+  }
+
+  function pressTarget(event) {
+    // 和系统一样：贴边的拉伸优先，剩下的才按标题栏处理
+    return edgeTarget(event) || (isDragZone(event) ? "caption" : "");
+  }
+
+  // 顶栏、左上角标题都算标题栏；右上角那几个按钮照常收鼠标
+  function isDragZone(event) {
+    return !!event.target.closest("[data-window-drag]") && !event.target.closest("#winStrip button");
+  }
+
+  // 贴边的厚度按系统给的可拉伸边框来（物理像素换成 CSS 像素）
+  function edgeTarget(event) {
+    const band = (desktop.resizeBand || 8) / (window.devicePixelRatio || 1);
+    const horizontal = event.clientX < band ? "left" : event.clientX > window.innerWidth - band ? "right" : "";
+    const vertical = event.clientY < band ? "top" : event.clientY > window.innerHeight - band ? "bottom" : "";
+    if (horizontal && vertical) return `${vertical}-${horizontal}`;
+    return horizontal || vertical;
+  }
+
+  const EDGE_CURSORS = {
+    top: "ns-resize",
+    bottom: "ns-resize",
+    left: "ew-resize",
+    right: "ew-resize",
+    "top-left": "nwse-resize",
+    "bottom-right": "nwse-resize",
+    "top-right": "nesw-resize",
+    "bottom-left": "nesw-resize",
+  };
+
+  // 原生窗口在边框上会给拉伸光标，这里只是把同样的提示补回来，按下之后仍然由系统接手
+  function showResizeCursor(event) {
+    const want = (event.buttons === 0 && EDGE_CURSORS[edgeTarget(event)]) || "";
+    if (want === lastEdgeCursor) return;
+    lastEdgeCursor = want;
+    document.body.style.cursor = want;
+  }
+
+  // 弹窗是原生 <dialog>，画在最顶层，z-index 再大也压不过它。
+  // 所以弹窗开着时把按钮条临时搬进弹窗里：它没有 transform，fixed 定位还是相对视口，位置不变。
+  function keepWinStripReachable() {
+    const strip = dom.winStrip;
+    const home = strip.parentNode;
+    const openDialogs = [];
+    const sync = () => {
+      const target = openDialogs[openDialogs.length - 1] || home;
+      if (strip.parentNode !== target) target.appendChild(strip);
+    };
+    new MutationObserver((records) => {
+      for (const record of records) {
+        const dialog = record.target;
+        if (!dialog.matches || !dialog.matches("dialog")) continue;
+        const at = openDialogs.indexOf(dialog);
+        if (dialog.open && at < 0) openDialogs.push(dialog);
+        else if (!dialog.open && at >= 0) openDialogs.splice(at, 1);
+      }
+      sync();
+    }).observe(document.body, { subtree: true, attributeFilter: ["open"] });
+    document.querySelectorAll("dialog[open]").forEach((d) => openDialogs.push(d));
+    sync();
+  }
+
+  async function desktopWindow(action) {
+    const data = await desktopCall("/api/desktop/window", { action });
+    if (data && typeof data.maximized === "boolean") {
+      desktop.maximized = data.maximized;
+      renderWindowState();
+    }
+  }
+
+  function renderWindowState() {
+    const label = desktop.maximized ? "还原" : "最大化";
+    dom.btnWinMax.title = label;
+    dom.btnWinMax.setAttribute("aria-label", label);
+    dom.btnWinMax.classList.toggle("is-active", desktop.maximized);
+  }
+
+  function renderDesktopUI() {
+    dom.setupPathPortable.textContent = desktop.options.portable || "";
+    dom.setupPathAppdata.textContent = desktop.options.appdata || "";
+    const mode = desktop.settings.on_close || "ask";
+    dom.closeModeSelect.value = mode;
+    dom.closeModeSelect.querySelector('[value="tray"]').disabled = !desktop.trayAvailable;
+    dom.desktopDataMode.textContent = MODE_LABELS[desktop.mode] || desktop.mode;
+    dom.desktopDataPath.textContent = desktop.dataDir || "—";
+    renderWindowState();
+  }
+
+  async function desktopCall(url, body) {
+    try {
+      return await api(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+      });
+    } catch (err) {
+      showToast((err && err.message) || "窗口操作失败", { error: true });
+      return null;
+    }
+  }
+
+  function openSetupDialog(firstRun) {
+    dom.setupTitle.textContent = firstRun ? "选择数据存放位置" : "更换数据存放位置";
+    dom.setupTip.textContent = firstRun
+      ? "确认后窗口会重启一次，之后可以在右上角的「窗口与数据」里更换。"
+      : "更换位置会把缓存和配置带到新目录，窗口需要重启一次。";
+    dom.btnSetupCancel.hidden = firstRun;
+    const setupClose = dom.setupDialog.querySelector(".dialog-close");
+    if (setupClose) setupClose.hidden = firstRun; // 首次启动必须选一个位置，不给「放弃」
+    dom.setupError.hidden = true;
+    dom.setupBusy.hidden = true;
+    dom.setupDialog.querySelector(".dialog-actions").hidden = false;
+    for (const button of dom.setupDialog.querySelectorAll(".setup-option")) {
+      button.disabled = false;
+    }
+    dom.setupDialog.showModal();
+  }
+
+  async function chooseDataDir(mode) {
+    for (const item of dom.setupDialog.querySelectorAll(".setup-option")) {
+      item.disabled = true;
+    }
+    dom.setupBusy.hidden = false;
+    dom.setupBusy.textContent = "正在把数据放到「" + (mode === "portable" ? "程序目录" : "系统目录") + "」，窗口马上重启…";
+    dom.setupDialog.querySelector(".dialog-actions").hidden = true;
+    const data = await desktopCall("/api/desktop/setup", { mode });
+    if (!data) {
+      dom.setupBusy.hidden = true;
+      dom.setupDialog.querySelector(".dialog-actions").hidden = false;
+      dom.setupError.hidden = false;
+      dom.setupError.textContent = "这个位置用不了，请换一种。";
+      for (const item of dom.setupDialog.querySelectorAll(".setup-option")) {
+        item.disabled = false;
+      }
+    }
+  }
+
+  function openDesktopDialog() {
+    renderDesktopUI();
+    dom.desktopDialog.showModal();
+  }
+
+  function setTitleWorld(name) {
+    if (!desktop.enabled) return;
+    desktopCall("/api/desktop/title", { text: name || "" });
+  }
+
+  window.DesktopCloseAsk = () => {
+    if (!desktop.enabled) return;
+    dom.closeAskRemember.checked = false;
+    dom.closeAskDialog.showModal();
+  };
+
+  // 窗口状态是系统改的（双击顶栏、Win+↑、任务栏、贴边分屏），后端轮询到就推一次过来。
+  window.DesktopWindowState = (data) => {
+    if (!data || typeof data.maximized !== "boolean") return;
+    desktop.maximized = data.maximized;
+    renderWindowState();
+  };
+
+  async function sendCloseChoice(choice) {
+    const remember = dom.closeAskRemember.checked;
+    dom.closeAskDialog.close();
+    await desktopCall("/api/desktop/close-choice", { choice, remember });
+  }
+
+  window.DesktopDrop = async (data) => {
+    const path = data && data.paths && data.paths[0];
+    if (!path) return;
+    if (desktop.setup) {
+      showToast("已记住这个存档，选完存放位置后会自动打开", { duration: 5200 });
+      return;
+    }
+    if (dom.worldDialog.open || state.dropBusy) return;
+    state.dropBusy = true;
+    try {
+      dom.worldPathInput.value = path;
+      const ok = await onWorldSubmit({ preventDefault() {} });
+      if (!ok) showToast("拖进来的文件夹里没有 level.dat", { error: true, duration: 5200 });
+    } finally {
+      state.dropBusy = false;
+    }
+  };
+
   // ---------------------------------------------------------------- world
 
   function applyWorld(info, options) {
@@ -1056,8 +1419,18 @@
       paragraph.textContent = "这个存档下没有可显示的 region 目录，请确认选择的是包含 level.dat 的存档文件夹。";
     } else {
       heading.textContent = "加载备份配置，开始选区";
-      paragraph.textContent = "选择配置后会按其中的存档路径打开存档。还没有配置时，点「直接打开存档」选择存档文件夹，框选后点「保存」即可。";
+      paragraph.textContent = desktop.enabled
+        ? "选择配置后会按其中的存档路径打开存档。还没有配置时，把存档文件夹直接拖进窗口，或点「直接打开存档」选择，框选后点「保存」即可。"
+        : "选择配置后会按其中的存档路径打开存档。还没有配置时，点「直接打开存档」选择存档文件夹，框选后点「保存」即可。";
     }
+  }
+
+  function renderEmptyHints() {
+    dom.worldSub.textContent = desktop.enabled
+      ? "把存档文件夹拖进窗口，或点「打开存档」选择"
+      : "加载配置或直接打开存档";
+    dom.btnSwitchWorld.textContent = state.info ? "切换存档" : "打开存档";
+    setEmptyStageCopy(false);
   }
 
   function setEmptyState() {
@@ -1078,10 +1451,10 @@
     clearTiles();
     dom.stageEmpty.hidden = false;
     dom.worldName.textContent = "尚未加载存档";
+    setTitleWorld("");
     dom.worldTags.textContent = "";
     dom.worldTags.hidden = true;
     dom.worldSub.hidden = false;
-    dom.worldSub.textContent = "加载配置或直接打开存档";
     dom.worldPath.textContent = "—";
     dom.worldPath.title = "";
     dom.worldPath.classList.remove("loaded");
@@ -1093,7 +1466,7 @@
     dom.btnRefresh.disabled = true;
     dom.btnIgnoreBrowse.disabled = true;
     closeIgnorePick();
-    setEmptyStageCopy(false);
+    renderEmptyHints();
     renderDims();
     renderSelections();
     updateExport();
@@ -1147,8 +1520,10 @@
     const info = state.info;
     if (!info) return;
     dom.worldName.textContent = info.name || "未命名存档";
+    setTitleWorld(info.name || "");
     renderWorldTags(info);
     dom.worldSub.hidden = true;
+    dom.btnSwitchWorld.textContent = "切换存档";
     dom.worldPath.textContent = info.path;
     dom.worldPath.title = info.path + "\n点击在文件管理器中定位存档";
     dom.worldPath.classList.add("loaded");
@@ -1283,7 +1658,7 @@
         } catch (err) {
           showToast(
             "匹配到配置「" + match.file + "」但加载失败：" + (err.message || "未知错误") +
-              "，已改用浏览器配置",
+              "，已改用未保存的配置",
             { error: true, duration: 6500 }
           );
           bindBrowserConfig(info);
@@ -1292,8 +1667,10 @@
         bindBrowserConfig(info);
       }
       maybePromptActivityScan(info);
+      return true;
     } catch (err) {
       showDialogError(err.message || "加载失败");
+      return false;
     } finally {
       dom.btnDialogOpen.disabled = false;
       dom.btnDialogCancel.disabled = false;
@@ -3060,7 +3437,7 @@
     dom.btnActivityClearDiscard.textContent = "清除排除标记（" + discs + "）";
     dom.activityDiscardHint.hidden = discs === 0;
     dom.activityDiscardHint.textContent =
-      "本维度已有 " + discs + " 个排除区块标记，重新扫描仍会保留这些区块，备份时会自动排除；标记保存在本机浏览器中。";
+      "本维度已有 " + discs + " 个排除区块标记，重新扫描仍会保留这些区块，备份时会自动排除；标记保存在本机。";
     renderActivitySummary(dim, existing, minSeconds);
     if (!dom.activityDialog.open) dom.activityDialog.showModal();
   }
@@ -4106,7 +4483,7 @@
     select.title = state.configFile
       ? state.configFile + (state.configDirty ? " · 有未保存的配置修改" : " · 已保存")
       : state.configBrowser
-        ? "浏览器配置「" + browserConfigLabel() + "」：只保存在本浏览器，关闭页面不会丢失；点「保存」写入配置文件"
+        ? "未保存的配置「" + browserConfigLabel() + "」：只保存在本机，关闭窗口不会丢失；点「保存」写入配置文件"
         : state.info
           ? "选择已有配置即可切换；点「保存」会存为 " + deriveConfigName()
           : "先打开存档，再选择或保存配置";
@@ -4133,7 +4510,7 @@
         : state.configDirty
           ? "配置有未保存修改，开始备份前会提示保存"
           : state.configBrowser
-            ? "浏览器配置只保存在本浏览器，备份不会写入配置文件"
+            ? "未保存的配置只保存在本机，备份不会写入配置文件"
             : "";
   }
 
@@ -4147,7 +4524,7 @@
       : state.configFile
         ? "保存到「" + state.configFile + "」"
         : state.configBrowser
-          ? "把浏览器配置保存为「" + deriveConfigName() + "」"
+          ? "把当前配置保存为「" + deriveConfigName() + "」"
           : "保存为「" + deriveConfigName() + "」";
     const savePrimary = !busy && !!state.info && (state.configDirty || !state.configFile);
     dom.btnConfigSave.classList.toggle("primary", savePrimary);
@@ -4177,7 +4554,7 @@
     }
     for (const entry of browserEntries) {
       select.append(
-        new Option(entry.name + " · 仅浏览器", BROWSER_OPTION_PREFIX + entry.key)
+        new Option(entry.name + " · 未保存", BROWSER_OPTION_PREFIX + entry.key)
       );
     }
     const preferred = state.configBrowser && state.info
@@ -4440,7 +4817,7 @@
   async function switchToBrowserConfig(key) {
     const entry = browserConfigEntries().find((item) => item.key === key);
     if (!entry) {
-      showToast("该浏览器配置已不存在", { error: true, duration: 5000 });
+      showToast("该未保存的配置已不存在", { error: true, duration: 5000 });
       restoreConfigSelect();
       return;
     }
@@ -4479,7 +4856,7 @@
       applyWorld(info);
       bindBrowserConfig(info);
     } catch (err) {
-      showToast("无法打开该浏览器配置对应的存档：" + (err.message || "未知错误"), {
+      showToast("无法打开该配置对应的存档：" + (err.message || "未知错误"), {
         error: true,
         duration: 6500,
       });
@@ -4612,8 +4989,8 @@
     updateExport();
     showToast(
       stored
-        ? "已恢复仅浏览器配置「" + browserConfigLabel() + "」"
-        : "未找到匹配的配置文件，已创建仅浏览器配置「" + browserConfigLabel() + "」",
+        ? "已恢复未保存的配置「" + browserConfigLabel() + "」"
+        : "未找到匹配的配置文件，已创建未保存的配置「" + browserConfigLabel() + "」",
       { duration: 5400 }
     );
   }
@@ -4745,7 +5122,7 @@
   }
 
   function backupConfigLabel() {
-    return state.configFile || browserConfigLabel() + " · 仅浏览器";
+    return state.configFile || browserConfigLabel() + " · 未保存";
   }
 
   function renderBackupSummary(items, coverage) {

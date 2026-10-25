@@ -78,6 +78,7 @@ select:focus-visible {
 }
 
 .main {
+  position: relative;
   flex: 1;
   min-width: 0;
   padding: 12px 12px 12px 0;
@@ -1611,6 +1612,7 @@ code {
 
 .world-dialog form,
 .world-dialog .dialog-card {
+  position: relative;
   padding: 20px;
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 16px;
@@ -1618,11 +1620,43 @@ code {
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
 }
 
+/* 弹窗右上角的 ×：和按 Esc 一样是放弃这次操作 */
+.dialog-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.dialog-close svg {
+  width: 13px;
+  height: 13px;
+}
+
+.dialog-close:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.dialog-close[hidden] {
+  display: none;
+}
+
 .dialog-head {
   display: flex;
   align-items: flex-start;
   gap: 12px;
   margin-bottom: 16px;
+  padding-right: 32px;
 }
 
 .dialog-icon {
@@ -2128,6 +2162,161 @@ code {
 
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* ------------------------------------------------------------------ 桌面窗口 */
+
+/* 无边框窗口：顶部这条带子是整窗宽的拖动区，四个按钮占满它、贴住右上角 */
+body.desktop .main {
+  padding-top: 36px;
+}
+
+/* 正文一律不可选中，只有输入框和路径/日志/预览这类文本可以复制 */
+body.desktop {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+body.desktop input,
+body.desktop textarea,
+body.desktop select,
+body.desktop code,
+body.desktop pre {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+body.desktop .brand {
+  /* 标题行照样能拖着走（data-window-drag），但不换成移动光标，免得看着像控件 */
+  cursor: default;
+}
+
+.win-strip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 36px;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  z-index: 40;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 弹窗让开顶部这条窗口按钮带，居中范围从带子下面算起，× 才不会被压住 */
+body.desktop .world-dialog {
+  top: 36px;
+}
+
+.win-strip[hidden] {
+  display: none;
+}
+
+.win-btn {
+  width: 44px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.win-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.win-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.win-btn.win-close:hover {
+  color: #fff;
+  background: #c8392f;
+}
+
+.win-btn.is-active {
+  color: #7ef3c1;
+}
+
+.setup-options {
+  display: grid;
+  gap: 10px;
+  margin: 4px 0 2px;
+}
+
+.setup-option {
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-2);
+  padding: 11px 13px;
+  display: grid;
+  gap: 3px;
+  cursor: default;
+}
+
+.setup-option:hover {
+  border-color: rgba(74, 222, 159, 0.55);
+  background: rgba(74, 222, 159, 0.07);
+}
+
+.setup-option:disabled {
+  opacity: 0.55;
+}
+
+.setup-busy {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--accent-soft);
+}
+
+.setup-option strong {
+  font-size: 13.5px;
+}
+
+.setup-option span {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.setup-path,
+.data-dir-text code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted-2);
+  word-break: break-all;
+}
+
+.data-dir-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-2);
+  padding: 11px 13px;
+  margin-top: 10px;
+}
+
+.data-dir-text {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.data-dir-text strong {
+  font-size: 13.5px;
+}
+
+.close-mode-select {
+  flex: 0 0 auto;
 }
 
 @media (max-width: 1100px) {
